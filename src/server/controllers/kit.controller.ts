@@ -5,9 +5,11 @@ import {
   createKitSchema,
   updateKitSchema,
   extractRequirementsSchema,
+  researchKitSchema,
   validateKitInvariants,
 } from "../validations/kit.validation";
 import { extractRequirementsFromJD } from "../services/requirement-extraction.service";
+import { conductCompanyResearch } from "../services/crawler/company-research.service";
 
 function formatKit(doc: KitDocument) {
   return {
@@ -429,4 +431,95 @@ export async function extractRequirementsForKit(
     });
   }
 }
+
+export async function researchKit(req: Request, res: Response): Promise<void> {
+  const id = getParamId(req.params.id || req.params.kitId);
+
+  if (!id) {
+    res.status(404).json({
+      success: false,
+      error: {
+        code: "KIT_NOT_FOUND",
+        message: "Interview kit not found.",
+      },
+    });
+    return;
+  }
+
+  const parseResult = researchKitSchema.safeParse(req.body || {});
+  if (!parseResult.success) {
+    res.status(400).json({
+      success: false,
+      error: {
+        code: "VALIDATION_ERROR",
+        message: parseResult.error.issues[0]?.message || "Invalid input data.",
+      },
+    });
+    return;
+  }
+
+  try {
+    // 1. Ownership isolation
+    const kit = await Kit.findOne({
+      _id: id,
+      userId: req.userId,
+    });
+
+    if (!kit) {
+      res.status(404).json({
+        success: false,
+        error: {
+          code: "KIT_NOT_FOUND",
+          message: "Interview kit not found.",
+        },
+      });
+      return;
+    }
+
+    // 2. Determine target company URL
+    const targetCompanyUrl = parseResult.data.companyUrl || kit.companyUrl;
+
+    // 3. Conduct link-driven research & interview discovery
+    let companyBrief;
+    try {
+      companyBrief = await conductCompanyResearch({
+        companyUrl: targetCompanyUrl,
+        jobTitle: kit.title,
+        jobDescription: kit.jobDescription,
+      });
+    } catch (researchErr) {
+      console.error("[Kit] Research service error:", researchErr);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: "RESEARCH_FAILED",
+          message: "Failed to conduct company and interview research.",
+        },
+      });
+      return;
+    }
+
+    // 4. Atomically persist research results into kit
+    kit.companyBrief = companyBrief;
+    if (parseResult.data.companyUrl) {
+      kit.companyUrl = parseResult.data.companyUrl;
+    }
+    await kit.save();
+
+    res.status(200).json({
+      success: true,
+      companyBrief: kit.companyBrief,
+    });
+  } catch (error) {
+    console.error("[Kit] Research kit error:", error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: "INTERNAL_SERVER_ERROR",
+        message: "An unexpected error occurred during company research.",
+      },
+    });
+  }
+}
+
 

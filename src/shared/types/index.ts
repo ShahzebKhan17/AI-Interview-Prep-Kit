@@ -127,6 +127,7 @@ export interface KitResponse {
   kit?: IKit;
   kits?: IKit[];
   requirements?: IRequirement[];
+  companyBrief?: ICompanyBrief;
   message?: string;
   error?: {
     code: string;

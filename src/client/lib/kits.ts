@@ -1,4 +1,4 @@
-import { IKit, IRequirement, KitResponse } from "@shared/types";
+import { IKit, IRequirement, ICompanyBrief, KitResponse } from "@shared/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
@@ -100,4 +100,23 @@ export async function extractKitRequirements(
   );
 
   return result.requirements || [];
+}
+
+export async function researchCompanyBrief(
+  kitId: string,
+  companyUrl?: string
+): Promise<ICompanyBrief> {
+  const result = await request<KitResponse>(
+    `/api/kits/${kitId}/research`,
+    {
+      method: "POST",
+      body: JSON.stringify(companyUrl ? { companyUrl } : {}),
+    }
+  );
+
+  if (!result.companyBrief) {
+    throw new KitApiError("Failed to retrieve company research.");
+  }
+
+  return result.companyBrief;
 }

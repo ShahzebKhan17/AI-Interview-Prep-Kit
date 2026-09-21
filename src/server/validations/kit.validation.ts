@@ -23,6 +23,14 @@ export const extractRequirementsSchema = z.object({
   jobDescription: z.string().trim().min(1, "Job description is required"),
 });
 
+export const researchKitSchema = z.object({
+  companyUrl: z
+    .string()
+    .trim()
+    .regex(httpUrlRegex, "Company URL must be a valid HTTP or HTTPS URL")
+    .optional(),
+});
+
 export const requirementSchema = z.object({
   id: z
     .string()

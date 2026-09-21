@@ -4,8 +4,8 @@ import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "../../../context/AuthContext";
-import { IKit, IRequirement } from "@shared/types";
-import { getKit, extractKitRequirements, KitApiError } from "../../../lib/kits";
+import { IKit, IRequirement, ISource } from "@shared/types";
+import { getKit, extractKitRequirements, researchCompanyBrief, KitApiError } from "../../../lib/kits";
 
 export default function KitDetailsPage() {
   const router = useRouter();
@@ -19,6 +19,8 @@ export default function KitDetailsPage() {
   const [error, setError] = useState<string | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [extractionError, setExtractionError] = useState<string | null>(null);
+  const [researching, setResearching] = useState(false);
+  const [researchError, setResearchError] = useState<string | null>(null);
 
   const handleExtractRequirements = async () => {
     if (!kit) return;
@@ -34,6 +36,23 @@ export default function KitDetailsPage() {
       );
     } finally {
       setExtracting(false);
+    }
+  };
+
+  const handleResearchCompany = async () => {
+    if (!kit) return;
+    setResearching(true);
+    setResearchError(null);
+
+    try {
+      const brief = await researchCompanyBrief(kit.id, kit.companyUrl);
+      setKit((prev) => (prev ? { ...prev, companyBrief: brief } : prev));
+    } catch (err) {
+      setResearchError(
+        (err as Error)?.message || "Failed to research company. Please try again."
+      );
+    } finally {
+      setResearching(false);
     }
   };
 
@@ -302,6 +321,176 @@ export default function KitDetailsPage() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+
+        {/* Company Brief & Public Interview Research Section (Stage 6) */}
+        <div className="p-8 bg-zinc-900 border border-zinc-800 rounded-xl shadow-lg space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2.5">
+                <h2 className="text-lg font-semibold text-white">Company Brief & Interview Insights</h2>
+                {kit.companyBrief?.summary && (
+                  <span className="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-emerald-950/60 text-emerald-400 border border-emerald-800">
+                    Researched
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-zinc-400 mt-1">
+                Autonomous crawler analysis of company website and public interview research.
+              </p>
+            </div>
+
+            <button
+              onClick={handleResearchCompany}
+              disabled={researching}
+              className="inline-flex items-center justify-center gap-2 py-2 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white font-medium rounded-lg text-sm transition focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed shrink-0"
+            >
+              {researching ? (
+                <>
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  <span>Researching...</span>
+                </>
+              ) : kit.companyBrief?.summary ? (
+                <span>Re-research Company</span>
+              ) : (
+                <span>Research Company</span>
+              )}
+            </button>
+          </div>
+
+          {researchError && (
+            <div
+              role="alert"
+              className="p-3 text-sm rounded-lg bg-red-950/60 border border-red-800 text-red-300"
+            >
+              {researchError}
+            </div>
+          )}
+
+          {researching && (
+            <div className="p-6 bg-zinc-950 border border-zinc-800 rounded-lg flex flex-col items-center justify-center gap-3 text-center">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
+              <p className="text-sm text-zinc-300 font-medium">
+                Crawling company website and gathering interview reviews...
+              </p>
+              <p className="text-xs text-zinc-500">
+                Discovering pages, checking robots.txt, searching public interview experiences, and synthesizing intelligence.
+              </p>
+            </div>
+          )}
+
+          {!researching && (!kit.companyBrief || !kit.companyBrief.summary) && (
+            <div className="p-6 bg-zinc-950/60 border border-dashed border-zinc-800 rounded-lg text-center space-y-2">
+              <p className="text-sm text-zinc-400">
+                No company research conducted yet.
+              </p>
+              <p className="text-xs text-zinc-500">
+                Click &quot;Research Company&quot; above to crawl {kit.companyUrl} and retrieve verified interview insights.
+              </p>
+            </div>
+          )}
+
+          {!researching && kit.companyBrief?.summary && (
+            <div className="space-y-4">
+              {/* Summary and Overview */}
+              <div className="p-5 bg-zinc-950 border border-zinc-800 rounded-lg space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+                    Company Overview
+                  </span>
+                  {kit.companyBrief.industry && (
+                    <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-zinc-800 text-zinc-300 border border-zinc-700">
+                      Industry: {kit.companyBrief.industry}
+                    </span>
+                  )}
+                </div>
+                <p className="text-sm text-zinc-200 leading-relaxed">
+                  {kit.companyBrief.summary}
+                </p>
+
+                {kit.companyBrief.productsOrServices && kit.companyBrief.productsOrServices.length > 0 && (
+                  <div className="pt-2">
+                    <span className="text-xs text-zinc-500 block mb-1.5">Products & Services</span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {kit.companyBrief.productsOrServices.map((product, idx) => (
+                        <span
+                          key={idx}
+                          className="px-2.5 py-0.5 text-xs rounded-md bg-zinc-900 text-zinc-300 border border-zinc-800"
+                        >
+                          {product}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Hiring Process */}
+              <div className="p-5 bg-zinc-950 border border-zinc-800 rounded-lg space-y-2">
+                <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider block">
+                  Hiring & Interview Process
+                </span>
+                {kit.companyBrief.hiringProcess ? (
+                  <p className="text-sm text-zinc-200 leading-relaxed whitespace-pre-wrap">
+                    {kit.companyBrief.hiringProcess}
+                  </p>
+                ) : (
+                  <div className="p-3 bg-zinc-900/60 border border-zinc-800/80 rounded text-xs text-zinc-400 italic">
+                    No verified interview or hiring process information publicly discovered for this company.
+                  </div>
+                )}
+              </div>
+
+              {/* Sources */}
+              {kit.companyBrief.sources && kit.companyBrief.sources.length > 0 && (
+                <div className="p-5 bg-zinc-950 border border-zinc-800 rounded-lg space-y-3">
+                  <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider block">
+                    Verified Sources & References ({kit.companyBrief.sources.length})
+                  </span>
+                  <div className="divide-y divide-zinc-800/60 border border-zinc-800 rounded-lg overflow-hidden bg-zinc-900/40">
+                    {kit.companyBrief.sources.map((src: ISource, idx: number) => (
+                      <div
+                        key={idx}
+                        className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-zinc-900 transition text-xs"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-zinc-500 font-mono text-[11px] shrink-0">
+                            [{idx + 1}]
+                          </span>
+                          <a
+                            href={src.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-indigo-400 hover:text-indigo-300 font-medium truncate"
+                          >
+                            {src.title || src.url}
+                          </a>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                          <span
+                            className={`px-2 py-0.5 text-[11px] font-medium rounded-full border capitalize ${
+                              src.sourceType === "company_website"
+                                ? "bg-blue-950/60 text-blue-400 border-blue-800"
+                                : src.sourceType === "careers_page"
+                                ? "bg-purple-950/60 text-purple-400 border-purple-800"
+                                : src.sourceType === "interview_review"
+                                ? "bg-amber-950/60 text-amber-400 border-amber-800"
+                                : "bg-zinc-800 text-zinc-400 border-zinc-700"
+                            }`}
+                          >
+                            {src.sourceType.replace(/_/g, " ")}
+                          </span>
+                          <span className="text-zinc-500 text-[11px] truncate max-w-[200px]">
+                            {src.url}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
