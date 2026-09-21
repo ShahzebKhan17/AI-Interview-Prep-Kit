@@ -20,8 +20,14 @@ export const createKitSchema = z.object({
 });
 
 export const requirementSchema = z.object({
-  id: z.string().trim().min(1, "Requirement ID is required"),
+  id: z
+    .string()
+    .trim()
+    .min(1, "Requirement ID is required")
+    .regex(/^REQ-\d{3,}$/i, "Requirement ID must follow format REQ-001"),
+  kitId: z.string().optional(),
   text: z.string().trim().min(1, "Requirement text is required"),
+  kind: z.enum(["technical", "behavioral", "domain"]).default("technical"),
   priority: z.enum(["must", "nice"]),
 });
 
@@ -120,10 +126,11 @@ export function validateKitInvariants(kitData: {
   if (kitData.requirements) {
     const reqIds = new Set<string>();
     for (const req of kitData.requirements) {
-      if (reqIds.has(req.id)) {
+      const normalizedId = req.id.toUpperCase();
+      if (reqIds.has(normalizedId)) {
         return `Duplicate requirement ID '${req.id}' found.`;
       }
-      reqIds.add(req.id);
+      reqIds.add(normalizedId);
     }
   }
 
@@ -140,11 +147,13 @@ export function validateKitInvariants(kitData: {
 
   // 3. Question -> Requirement relationship check
   if (kitData.questionBank && kitData.requirements) {
-    const validReqIds = new Set(kitData.requirements.map((r) => r.id));
+    const validReqIds = new Set(
+      kitData.requirements.map((r) => r.id.toUpperCase())
+    );
     for (const q of kitData.questionBank) {
       if (q.requirementIds) {
         for (const reqId of q.requirementIds) {
-          if (!validReqIds.has(reqId)) {
+          if (!validReqIds.has(reqId.toUpperCase())) {
             return `Question '${q.id}' references non-existent requirement ID '${reqId}'.`;
           }
         }

@@ -38,9 +38,13 @@ export type KitStatus = "draft" | "generating" | "ready" | "failed" | "partial";
 
 export type RequirementPriority = "must" | "nice";
 
+export type RequirementKind = "technical" | "behavioral" | "domain";
+
 export interface IRequirement {
-  id: string;
+  id: string; // e.g. "REQ-001"
+  kitId?: string;
   text: string;
+  kind: RequirementKind;
   priority: RequirementPriority;
 }
 

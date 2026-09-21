@@ -2,13 +2,16 @@ import mongoose, { Document, Schema, Model, Types } from "mongoose";
 import {
   KitStatus,
   RequirementPriority,
+  RequirementKind,
   QuestionCategory,
   ContentState,
 } from "../../shared/types";
 
 export interface IRequirementDoc {
   id: string;
+  kitId?: Types.ObjectId | string;
   text: string;
+  kind: RequirementKind;
   priority: RequirementPriority;
 }
 
@@ -78,7 +81,14 @@ export type KitDocument = Document & IKitDoc;
 const requirementSchema = new Schema<IRequirementDoc>(
   {
     id: { type: String, required: true },
+    kitId: { type: Schema.Types.ObjectId, ref: "Kit" },
     text: { type: String, required: true, trim: true },
+    kind: {
+      type: String,
+      enum: ["technical", "behavioral", "domain"],
+      required: true,
+      default: "technical",
+    },
     priority: { type: String, enum: ["must", "nice"], required: true },
   },
   { _id: false }
@@ -207,7 +217,24 @@ const kitSchema = new Schema<KitDocument>(
       enum: ["draft", "generating", "ready", "failed", "partial"],
       default: "draft",
     },
-    requirements: { type: [requirementSchema], default: [] },
+    requirements: {
+      type: [requirementSchema],
+      default: [],
+      validate: [
+        {
+          validator: function (reqs: IRequirementDoc[]) {
+            const seen = new Set<string>();
+            for (const r of reqs) {
+              const upper = r.id.toUpperCase();
+              if (seen.has(upper)) return false;
+              seen.add(upper);
+            }
+            return true;
+          },
+          message: "All requirements within a kit must have unique IDs.",
+        },
+      ],
+    },
     companyBrief: {
       type: companyBriefSchema,
       default: () => ({
@@ -236,6 +263,7 @@ const kitSchema = new Schema<KitDocument>(
 );
 
 kitSchema.index({ userId: 1, createdAt: -1 });
+kitSchema.index({ "requirements.id": 1 });
 
 export const Kit: Model<KitDocument> =
   mongoose.models.Kit || mongoose.model<KitDocument>("Kit", kitSchema);
