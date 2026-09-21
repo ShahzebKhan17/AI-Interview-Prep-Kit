@@ -5,6 +5,7 @@ import cookieParser from "cookie-parser";
 import { connectDB, isDbConnected } from "./config/db";
 import { HealthCheckResponse } from "../shared/types";
 import authRoutes from "./routes/auth.routes";
+import kitRoutes from "./routes/kit.routes";
 
 // Load environment variables
 dotenv.config();
@@ -42,6 +43,9 @@ app.get("/", (_req: Request, res: Response) => {
 
 // Authentication Routes (Stage 2A)
 app.use("/api/auth", authRoutes);
+
+// Interview Kit CRUD Routes (Stage 3)
+app.use("/api/kits", kitRoutes);
 
 // Initialize database connection & start server
 connectDB().finally(() => {

@@ -31,3 +31,96 @@ export interface AuthResponse {
     message: string;
   };
 }
+
+// Stage 3: Interview Kit Types
+
+export type KitStatus = "draft" | "generating" | "ready" | "failed" | "partial";
+
+export type RequirementPriority = "must" | "nice";
+
+export interface IRequirement {
+  id: string;
+  text: string;
+  priority: RequirementPriority;
+}
+
+export type QuestionCategory =
+  | "technical"
+  | "behavioral"
+  | "company"
+  | "roleSpecific";
+
+export type ContentState = "generated" | "edited" | "pinned";
+
+export interface IQuestion {
+  id: string;
+  category: QuestionCategory;
+  question: string;
+  answerOutline: string;
+  requirementIds: string[];
+  durationMinutes: number;
+  state: ContentState;
+}
+
+export interface IFlashcard {
+  id: string;
+  front: string;
+  back: string;
+  state: ContentState;
+}
+
+export interface ISource {
+  url: string;
+  title: string;
+  sourceType: string;
+}
+
+export interface ICompanyBrief {
+  summary: string;
+  productsOrServices: string[];
+  industry: string;
+  hiringProcess: string | null;
+  sources: ISource[];
+}
+
+export interface IRoleBreakdown {
+  summary: string;
+  responsibilities: string[];
+  skills: string[];
+}
+
+export interface IStudyDay {
+  day: number;
+  topic: string;
+  questionIds: string[];
+  durationMinutes: number;
+}
+
+export interface IKit {
+  id: string;
+  userId: string;
+  title: string;
+  jobDescription: string;
+  companyUrl: string;
+  daysAvailable: number;
+  status: KitStatus;
+  requirements: IRequirement[];
+  companyBrief: ICompanyBrief;
+  roleBreakdown: IRoleBreakdown;
+  questionBank: IQuestion[];
+  flashcards: IFlashcard[];
+  studySchedule: IStudyDay[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KitResponse {
+  success: boolean;
+  kit?: IKit;
+  kits?: IKit[];
+  message?: string;
+  error?: {
+    code: string;
+    message: string;
+  };
+}
