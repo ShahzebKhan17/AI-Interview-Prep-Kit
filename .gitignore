@@ -1,0 +1,27 @@
+# Operating System Files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE & Editors
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Environment & Secrets
+.env
+.env.local
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+
+# Node / Web
+node_modules/
+dist/
+build/
