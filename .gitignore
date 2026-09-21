@@ -10,18 +10,17 @@ desktop.ini
 
 # Environment & Secrets
 .env
-.env.local
+.env*.local
 *.log
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-venv/
-.venv/
-env/
-
-# Node / Web
+# Dependencies
 node_modules/
+
+# Production & Build Outputs
 dist/
 build/
+.next/
+src/client/.next/
+out/
+next-env.d.ts
+src/client/next-env.d.ts
