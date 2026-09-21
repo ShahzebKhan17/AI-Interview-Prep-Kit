@@ -48,6 +48,10 @@ export interface IRequirement {
   priority: RequirementPriority;
 }
 
+export interface ExtractionResult {
+  requirements: IRequirement[];
+}
+
 export type QuestionCategory =
   | "technical"
   | "behavioral"
