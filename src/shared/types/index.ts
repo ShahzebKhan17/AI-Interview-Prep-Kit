@@ -128,6 +128,7 @@ export interface KitResponse {
   kits?: IKit[];
   requirements?: IRequirement[];
   companyBrief?: ICompanyBrief;
+  questionBank?: IQuestion[];
   message?: string;
   error?: {
     code: string;

@@ -10,6 +10,7 @@ import {
 } from "../validations/kit.validation";
 import { extractRequirementsFromJD } from "../services/requirement-extraction.service";
 import { conductCompanyResearch } from "../services/crawler/company-research.service";
+import { generateQuestionBank } from "../services/question-generation.service";
 
 function formatKit(doc: KitDocument) {
   return {
@@ -521,5 +522,130 @@ export async function researchKit(req: Request, res: Response): Promise<void> {
     });
   }
 }
+
+export async function generateQuestions(req: Request, res: Response): Promise<void> {
+  const id = getParamId(req.params.id);
+
+  if (!id) {
+    res.status(404).json({
+      success: false,
+      error: {
+        code: "KIT_NOT_FOUND",
+        message: "Interview kit not found.",
+      },
+    });
+    return;
+  }
+
+  try {
+    // 1. Verify Kit exists and belongs to authenticated user (ownership isolation)
+    const kit = await Kit.findOne({
+      _id: id,
+      userId: req.userId,
+    });
+
+    if (!kit) {
+      res.status(404).json({
+        success: false,
+        error: {
+          code: "KIT_NOT_FOUND",
+          message: "Interview kit not found.",
+        },
+      });
+      return;
+    }
+
+    // 2. Precondition Check: Requirements must already be extracted
+    if (!kit.requirements || kit.requirements.length === 0) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: "PREREQUISITE_FAILED",
+          message: "Job requirements must be extracted before questions can be generated.",
+        },
+      });
+      return;
+    }
+
+    // 3. Generate Question Bank in memory
+    let generatedQuestions;
+    try {
+      generatedQuestions = await generateQuestionBank({
+        kitId: kit._id.toString(),
+        jobTitle: kit.title,
+        jobDescription: kit.jobDescription,
+        requirements: kit.requirements.map((r) => ({
+          id: r.id,
+          text: r.text,
+          kind: r.kind,
+          priority: r.priority,
+        })),
+        companyBrief: kit.companyBrief,
+      });
+    } catch (genError) {
+      console.error("[Kit] Generation service error:", genError);
+      const errorMessage = (genError as Error).message || "";
+      if (errorMessage.startsWith("GENERATION_VALIDATION_FAILED")) {
+        res.status(500).json({
+          success: false,
+          error: {
+            code: "GENERATION_VALIDATION_FAILED",
+            message: "AI question generation failed validation after retry.",
+          },
+        });
+        return;
+      }
+
+      res.status(500).json({
+        success: false,
+        error: {
+          code: "GENERATION_FAILED",
+          message: "Failed to generate interview questions. Please try again.",
+        },
+      });
+      return;
+    }
+
+    // 4. Invariant check on kit document with new questions before saving
+    const invariantError = validateKitInvariants({
+      requirements: kit.requirements,
+      questionBank: generatedQuestions,
+      flashcards: kit.flashcards,
+      studySchedule: kit.studySchedule,
+    });
+
+    if (invariantError) {
+      res.status(500).json({
+        success: false,
+        error: {
+          code: "GENERATION_VALIDATION_FAILED",
+          message: invariantError,
+        },
+      });
+      return;
+    }
+
+    // 5. Replace the complete questionBank in memory only after successful validation
+    kit.questionBank = generatedQuestions;
+    // Preserve kit.status as "draft" per approved architecture
+
+    await kit.save();
+
+    res.status(200).json({
+      success: true,
+      questionBank: kit.questionBank,
+    });
+  } catch (error) {
+    console.error("[Kit] Generate questions error:", error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: "INTERNAL_SERVER_ERROR",
+        message: "An unexpected error occurred during question generation.",
+      },
+    });
+  }
+}
+
 
 

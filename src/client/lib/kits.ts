@@ -1,4 +1,4 @@
-import { IKit, IRequirement, ICompanyBrief, KitResponse } from "@shared/types";
+import { IKit, IRequirement, ICompanyBrief, IQuestion, KitResponse } from "@shared/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
@@ -119,4 +119,22 @@ export async function researchCompanyBrief(
   }
 
   return result.companyBrief;
+}
+
+export async function generateKitQuestions(
+  kitId: string
+): Promise<IQuestion[]> {
+  const result = await request<KitResponse>(
+    `/api/kits/${kitId}/generate`,
+    {
+      method: "POST",
+      body: JSON.stringify({}),
+    }
+  );
+
+  if (!result.questionBank) {
+    throw new KitApiError("Failed to generate question bank.");
+  }
+
+  return result.questionBank;
 }

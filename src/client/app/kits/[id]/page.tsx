@@ -4,8 +4,8 @@ import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "../../../context/AuthContext";
-import { IKit, IRequirement, ISource } from "@shared/types";
-import { getKit, extractKitRequirements, researchCompanyBrief, KitApiError } from "../../../lib/kits";
+import { IKit, IRequirement, ISource, IQuestion } from "@shared/types";
+import { getKit, extractKitRequirements, researchCompanyBrief, generateKitQuestions, KitApiError } from "../../../lib/kits";
 
 export default function KitDetailsPage() {
   const router = useRouter();
@@ -21,6 +21,8 @@ export default function KitDetailsPage() {
   const [extractionError, setExtractionError] = useState<string | null>(null);
   const [researching, setResearching] = useState(false);
   const [researchError, setResearchError] = useState<string | null>(null);
+  const [generatingQuestions, setGeneratingQuestions] = useState(false);
+  const [generationError, setGenerationError] = useState<string | null>(null);
 
   const handleExtractRequirements = async () => {
     if (!kit) return;
@@ -53,6 +55,28 @@ export default function KitDetailsPage() {
       );
     } finally {
       setResearching(false);
+    }
+  };
+
+  const handleGenerateQuestions = async () => {
+    if (!kit) return;
+    if (!kit.requirements || kit.requirements.length === 0) {
+      setGenerationError("Please extract job requirements before generating questions.");
+      return;
+    }
+
+    setGeneratingQuestions(true);
+    setGenerationError(null);
+
+    try {
+      const questions = await generateKitQuestions(kit.id);
+      setKit((prev) => (prev ? { ...prev, questionBank: questions } : prev));
+    } catch (err) {
+      setGenerationError(
+        (err as Error)?.message || "Failed to generate question bank. Please try again."
+      );
+    } finally {
+      setGeneratingQuestions(false);
     }
   };
 
@@ -494,7 +518,152 @@ export default function KitDetailsPage() {
             </div>
           )}
         </div>
+
+        {/* Interview Question Bank Section (Stage 7) */}
+        <div className="p-8 bg-zinc-900 border border-zinc-800 rounded-xl shadow-lg space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2.5">
+                <h2 className="text-lg font-semibold text-white">Interview Question Bank</h2>
+                {kit.questionBank && kit.questionBank.length > 0 && (
+                  <span className="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-indigo-950/60 text-indigo-400 border border-indigo-800">
+                    {kit.questionBank.length} {kit.questionBank.length === 1 ? "Question" : "Questions"}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-zinc-400 mt-1">
+                AI-generated interview questions mapped to requirements and grounded in company research.
+              </p>
+            </div>
+
+            <button
+              onClick={handleGenerateQuestions}
+              disabled={generatingQuestions || !kit.requirements || kit.requirements.length === 0}
+              className="inline-flex items-center justify-center gap-2 py-2 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white font-medium rounded-lg text-sm transition focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer disabled:cursor-not-allowed shrink-0"
+              title={
+                !kit.requirements || kit.requirements.length === 0
+                  ? "Requirements must be extracted before generating questions."
+                  : undefined
+              }
+            >
+              {generatingQuestions ? (
+                <>
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  <span>Generating...</span>
+                </>
+              ) : kit.questionBank && kit.questionBank.length > 0 ? (
+                <span>Regenerate Question Bank</span>
+              ) : (
+                <span>Generate Questions</span>
+              )}
+            </button>
+          </div>
+
+          {(!kit.requirements || kit.requirements.length === 0) && (
+            <div className="p-3 text-xs rounded-lg bg-amber-950/40 border border-amber-800/80 text-amber-300">
+              Note: Extract job requirements above before generating interview questions.
+            </div>
+          )}
+
+          {generationError && (
+            <div
+              role="alert"
+              className="p-3 text-sm rounded-lg bg-red-950/60 border border-red-800 text-red-300"
+            >
+              {generationError}
+            </div>
+          )}
+
+          {generatingQuestions && (
+            <div className="p-6 bg-zinc-950 border border-zinc-800 rounded-lg flex flex-col items-center justify-center gap-3 text-center">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+              <p className="text-sm text-zinc-300 font-medium">
+                Generating targeted interview questions and structured answer outlines...
+              </p>
+              <p className="text-xs text-zinc-500">
+                Mapping questions to requirements, allocating practice duration, and grounding in company brief.
+              </p>
+            </div>
+          )}
+
+          {!generatingQuestions && (!kit.questionBank || kit.questionBank.length === 0) && (
+            <div className="p-6 bg-zinc-950/60 border border-dashed border-zinc-800 rounded-lg text-center space-y-2">
+              <p className="text-sm text-zinc-400">
+                No interview questions generated yet.
+              </p>
+              <p className="text-xs text-zinc-500">
+                Click &quot;Generate Questions&quot; above to synthesize a complete question bank based on the extracted requirements.
+              </p>
+            </div>
+          )}
+
+          {!generatingQuestions && kit.questionBank && kit.questionBank.length > 0 && (
+            <div className="space-y-4">
+              {kit.questionBank.map((q: IQuestion) => (
+                <div
+                  key={q.id}
+                  className="p-5 bg-zinc-950 border border-zinc-800 rounded-lg space-y-3 hover:border-zinc-700/80 transition"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2 py-0.5 font-mono text-xs font-semibold rounded bg-zinc-800 text-zinc-200 border border-zinc-700">
+                        {q.id}
+                      </span>
+                      <span
+                        className={`px-2 py-0.5 text-xs font-medium rounded-full border capitalize ${
+                          q.category === "technical"
+                            ? "bg-blue-950/60 text-blue-400 border-blue-800"
+                            : q.category === "behavioral"
+                            ? "bg-purple-950/60 text-purple-400 border-purple-800"
+                            : q.category === "roleSpecific"
+                            ? "bg-emerald-950/60 text-emerald-400 border-emerald-800"
+                            : "bg-amber-950/60 text-amber-400 border-amber-800"
+                        }`}
+                      >
+                        {q.category === "roleSpecific" ? "Role Specific" : q.category}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-zinc-400">
+                        ⏱️ {q.durationMinutes} min
+                      </span>
+                      {q.requirementIds && q.requirementIds.length > 0 && (
+                        <div className="flex items-center gap-1">
+                          {q.requirementIds.map((reqId: string) => (
+                            <span
+                              key={reqId}
+                              className="px-2 py-0.5 font-mono text-[11px] rounded bg-zinc-900 text-zinc-400 border border-zinc-800"
+                            >
+                              {reqId}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <p className="text-base font-semibold text-white leading-snug">
+                    {q.question}
+                  </p>
+
+                  {q.answerOutline && (
+                    <div className="p-3 bg-zinc-900/70 border border-zinc-800/80 rounded-lg space-y-1">
+                      <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider block">
+                        Answer Guidance &amp; Outline:
+                      </span>
+                      <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap">
+                        {q.answerOutline}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </main>
   );
 }
+
