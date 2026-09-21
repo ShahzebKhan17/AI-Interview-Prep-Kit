@@ -1,4 +1,4 @@
-import { IKit, IRequirement, ICompanyBrief, IQuestion, KitResponse } from "@shared/types";
+import { IKit, IRequirement, ICompanyBrief, IQuestion, ICoverageReport, KitResponse } from "@shared/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
@@ -137,4 +137,21 @@ export async function generateKitQuestions(
   }
 
   return result.questionBank;
+}
+
+export async function getKitCoverage(
+  kitId: string
+): Promise<ICoverageReport> {
+  const result = await request<KitResponse>(
+    `/api/kits/${kitId}/coverage`,
+    {
+      method: "GET",
+    }
+  );
+
+  if (!result.coverage) {
+    throw new KitApiError("Failed to retrieve coverage report.");
+  }
+
+  return result.coverage;
 }

@@ -5,4 +5,5 @@ export * from "./crawler/html-parser";
 export * from "./crawler/interview-search";
 export * from "./crawler/company-research.service";
 export * from "./question-generation.service";
+export * from "./coverage.service";
 

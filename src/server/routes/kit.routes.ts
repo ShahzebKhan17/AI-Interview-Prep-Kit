@@ -8,6 +8,7 @@ import {
   extractRequirementsForKit,
   researchKit,
   generateQuestions,
+  getKitCoverage,
 } from "../controllers/kit.controller";
 import { requireAuth } from "../middleware/auth.middleware";
 
@@ -24,5 +25,6 @@ router.delete("/:id", deleteKit);
 router.post("/:id/requirements/extract", extractRequirementsForKit);
 router.post("/:id/research", researchKit);
 router.post("/:id/generate", generateQuestions);
+router.get("/:id/coverage", getKitCoverage);
 
 export default router;

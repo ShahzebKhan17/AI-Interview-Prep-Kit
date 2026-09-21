@@ -122,6 +122,39 @@ export interface IKit {
   updatedAt: string;
 }
 
+export interface IRequirementCoverage {
+  requirement: IRequirement;
+  isCovered: boolean;
+  linkedQuestionIds: string[];
+}
+
+export interface ICoverageKindBreakdown {
+  total: number;
+  covered: number;
+}
+
+export interface ICoverageSummary {
+  totalRequirements: number;
+  coveredCount: number;
+  uncoveredCount: number;
+  coveragePercentage: number;
+  byKind: {
+    technical: ICoverageKindBreakdown;
+    behavioral: ICoverageKindBreakdown;
+    domain: ICoverageKindBreakdown;
+  };
+  byPriority: {
+    must: ICoverageKindBreakdown;
+    nice: ICoverageKindBreakdown;
+  };
+}
+
+export interface ICoverageReport {
+  summary: ICoverageSummary;
+  covered: IRequirementCoverage[];
+  gaps: IRequirementCoverage[];
+}
+
 export interface KitResponse {
   success: boolean;
   kit?: IKit;
@@ -129,9 +162,11 @@ export interface KitResponse {
   requirements?: IRequirement[];
   companyBrief?: ICompanyBrief;
   questionBank?: IQuestion[];
+  coverage?: ICoverageReport;
   message?: string;
   error?: {
     code: string;
     message: string;
   };
 }
+

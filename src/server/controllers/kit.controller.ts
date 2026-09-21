@@ -11,6 +11,7 @@ import {
 import { extractRequirementsFromJD } from "../services/requirement-extraction.service";
 import { conductCompanyResearch } from "../services/crawler/company-research.service";
 import { generateQuestionBank } from "../services/question-generation.service";
+import { calculateKitCoverage } from "../services/coverage.service";
 
 function formatKit(doc: KitDocument) {
   return {
@@ -642,6 +643,86 @@ export async function generateQuestions(req: Request, res: Response): Promise<vo
       error: {
         code: "INTERNAL_SERVER_ERROR",
         message: "An unexpected error occurred during question generation.",
+      },
+    });
+  }
+}
+
+export async function getKitCoverage(req: Request, res: Response): Promise<void> {
+  const id = getParamId(req.params.id);
+
+  if (!id) {
+    res.status(404).json({
+      success: false,
+      error: {
+        code: "KIT_NOT_FOUND",
+        message: "Interview kit not found.",
+      },
+    });
+    return;
+  }
+
+  try {
+    // 1. Verify Kit exists and belongs to authenticated user (ownership isolation)
+    const kit = await Kit.findOne({
+      _id: id,
+      userId: req.userId,
+    });
+
+    if (!kit) {
+      res.status(404).json({
+        success: false,
+        error: {
+          code: "KIT_NOT_FOUND",
+          message: "Interview kit not found.",
+        },
+      });
+      return;
+    }
+
+    // 2. Precondition Check: Requirements must already be extracted
+    if (!kit.requirements || kit.requirements.length === 0) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: "PREREQUISITE_FAILED",
+          message: "Job requirements must be extracted before coverage can be analyzed.",
+        },
+      });
+      return;
+    }
+
+    // 3. Compute deterministic coverage and detect gaps
+    const coverage = calculateKitCoverage({
+      requirements: kit.requirements.map((r) => ({
+        id: r.id,
+        text: r.text,
+        kind: r.kind,
+        priority: r.priority,
+      })),
+      questionBank: kit.questionBank.map((q) => ({
+        id: q.id,
+        category: q.category,
+        question: q.question,
+        answerOutline: q.answerOutline,
+        requirementIds: q.requirementIds,
+        durationMinutes: q.durationMinutes,
+        state: q.state,
+      })),
+    });
+
+    // 4. Return coverage report (read-only, zero database writes)
+    res.status(200).json({
+      success: true,
+      coverage,
+    });
+  } catch (error) {
+    console.error("[Kit] Get coverage error:", error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: "INTERNAL_SERVER_ERROR",
+        message: "An unexpected error occurred while calculating coverage.",
       },
     });
   }
