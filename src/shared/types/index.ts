@@ -15,3 +15,19 @@ export interface HealthCheckResponse {
   database: "connected" | "disconnected" | "connecting";
   uptime: number;
 }
+
+export interface AuthUser {
+  id: string;
+  name: string;
+  email: string;
+}
+
+export interface AuthResponse {
+  success: boolean;
+  user?: AuthUser;
+  message?: string;
+  error?: {
+    code: string;
+    message: string;
+  };
+}
