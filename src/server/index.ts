@@ -1,8 +1,10 @@
 import dotenv from "dotenv";
 import express, { Request, Response } from "express";
 import cors from "cors";
+import cookieParser from "cookie-parser";
 import { connectDB, isDbConnected } from "./config/db";
 import { HealthCheckResponse } from "../shared/types";
+import authRoutes from "./routes/auth.routes";
 
 // Load environment variables
 dotenv.config();
@@ -19,6 +21,7 @@ app.use(
   })
 );
 app.use(express.json());
+app.use(cookieParser());
 
 // Foundation Health Check Route
 app.get("/health", (_req: Request, res: Response<HealthCheckResponse>) => {
@@ -36,6 +39,9 @@ app.get("/", (_req: Request, res: Response) => {
     message: "AI Interview Prep Kit API - Foundation Server Running",
   });
 });
+
+// Authentication Routes (Stage 2A)
+app.use("/api/auth", authRoutes);
 
 // Initialize database connection & start server
 connectDB().finally(() => {
