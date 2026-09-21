@@ -19,6 +19,10 @@ export const createKitSchema = z.object({
     .min(1, "Days available must be at least 1 day"),
 });
 
+export const extractRequirementsSchema = z.object({
+  jobDescription: z.string().trim().min(1, "Job description is required"),
+});
+
 export const requirementSchema = z.object({
   id: z
     .string()

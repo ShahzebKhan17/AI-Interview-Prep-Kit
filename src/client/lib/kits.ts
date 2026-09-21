@@ -1,4 +1,4 @@
-import { IKit, KitResponse } from "@shared/types";
+import { IKit, IRequirement, KitResponse } from "@shared/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
@@ -85,4 +85,19 @@ export async function getKit(id: string): Promise<IKit> {
   }
 
   return result.kit;
+}
+
+export async function extractKitRequirements(
+  kitId: string,
+  jobDescription: string
+): Promise<IRequirement[]> {
+  const result = await request<KitResponse>(
+    `/api/kits/${kitId}/requirements/extract`,
+    {
+      method: "POST",
+      body: JSON.stringify({ jobDescription }),
+    }
+  );
+
+  return result.requirements || [];
 }

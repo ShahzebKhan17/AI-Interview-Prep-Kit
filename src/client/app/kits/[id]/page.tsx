@@ -4,8 +4,8 @@ import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "../../../context/AuthContext";
-import { IKit } from "@shared/types";
-import { getKit, KitApiError } from "../../../lib/kits";
+import { IKit, IRequirement } from "@shared/types";
+import { getKit, extractKitRequirements, KitApiError } from "../../../lib/kits";
 
 export default function KitDetailsPage() {
   const router = useRouter();
@@ -17,6 +17,25 @@ export default function KitDetailsPage() {
   const [kit, setKit] = useState<IKit | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [extracting, setExtracting] = useState(false);
+  const [extractionError, setExtractionError] = useState<string | null>(null);
+
+  const handleExtractRequirements = async () => {
+    if (!kit) return;
+    setExtracting(true);
+    setExtractionError(null);
+
+    try {
+      const extracted = await extractKitRequirements(kit.id, kit.jobDescription);
+      setKit((prev) => (prev ? { ...prev, requirements: extracted } : prev));
+    } catch (err) {
+      setExtractionError(
+        (err as Error)?.message || "Failed to extract requirements. Please try again."
+      );
+    } finally {
+      setExtracting(false);
+    }
+  };
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -171,6 +190,120 @@ export default function KitDetailsPage() {
           <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-lg text-sm text-zinc-300 whitespace-pre-wrap font-sans leading-relaxed">
             {kit.jobDescription}
           </div>
+        </div>
+
+        {/* Extracted Job Requirements Section (Stage 5.3) */}
+        <div className="p-8 bg-zinc-900 border border-zinc-800 rounded-xl shadow-lg space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2.5">
+                <h2 className="text-lg font-semibold text-white">Extracted Requirements</h2>
+                {kit.requirements && kit.requirements.length > 0 && (
+                  <span className="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-indigo-950/60 text-indigo-400 border border-indigo-800">
+                    {kit.requirements.length} {kit.requirements.length === 1 ? "Requirement" : "Requirements"}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-zinc-400 mt-1">
+                Structured technical, behavioral, and domain requirements extracted from the Job Description.
+              </p>
+            </div>
+
+            <button
+              onClick={handleExtractRequirements}
+              disabled={extracting}
+              className="inline-flex items-center justify-center gap-2 py-2 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white font-medium rounded-lg text-sm transition focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer disabled:cursor-not-allowed shrink-0"
+            >
+              {extracting ? (
+                <>
+                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                  <span>Extracting...</span>
+                </>
+              ) : kit.requirements && kit.requirements.length > 0 ? (
+                <span>Re-extract Requirements</span>
+              ) : (
+                <span>Extract Requirements</span>
+              )}
+            </button>
+          </div>
+
+          {extractionError && (
+            <div
+              role="alert"
+              className="p-3 text-sm rounded-lg bg-red-950/60 border border-red-800 text-red-300"
+            >
+              {extractionError}
+            </div>
+          )}
+
+          {extracting && (
+            <div className="p-6 bg-zinc-950 border border-zinc-800 rounded-lg flex flex-col items-center justify-center gap-3 text-center">
+              <div className="h-6 w-6 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+              <p className="text-sm text-zinc-300 font-medium">
+                Analyzing Job Description and extracting structured requirements...
+              </p>
+              <p className="text-xs text-zinc-500">
+                Categorizing into technical, behavioral, and domain requirements with deterministic IDs.
+              </p>
+            </div>
+          )}
+
+          {!extracting && (!kit.requirements || kit.requirements.length === 0) && (
+            <div className="p-6 bg-zinc-950/60 border border-dashed border-zinc-800 rounded-lg text-center space-y-2">
+              <p className="text-sm text-zinc-400">
+                No requirements have been extracted for this kit yet.
+              </p>
+              <p className="text-xs text-zinc-500">
+                Click &quot;Extract Requirements&quot; above to run the extraction service on this Job Description.
+              </p>
+            </div>
+          )}
+
+          {!extracting && kit.requirements && kit.requirements.length > 0 && (
+            <div className="divide-y divide-zinc-800/80 border border-zinc-800 rounded-lg overflow-hidden bg-zinc-950">
+              {kit.requirements.map((req: IRequirement) => (
+                <div
+                  key={req.id}
+                  className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-zinc-900/50 transition"
+                >
+                  <div className="flex items-start gap-3">
+                    <span className="px-2 py-0.5 font-mono text-xs font-semibold rounded bg-zinc-800 text-zinc-200 border border-zinc-700 shrink-0">
+                      {req.id}
+                    </span>
+                    <span className="text-sm text-zinc-200 leading-snug">
+                      {req.text}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                    {/* Kind badge */}
+                    <span
+                      className={`px-2 py-0.5 text-xs font-medium rounded-full border capitalize ${
+                        req.kind === "technical"
+                          ? "bg-blue-950/60 text-blue-400 border-blue-800"
+                          : req.kind === "behavioral"
+                          ? "bg-purple-950/60 text-purple-400 border-purple-800"
+                          : "bg-emerald-950/60 text-emerald-400 border-emerald-800"
+                      }`}
+                    >
+                      {req.kind}
+                    </span>
+
+                    {/* Priority badge */}
+                    <span
+                      className={`px-2 py-0.5 text-xs font-medium rounded-full border ${
+                        req.priority === "must"
+                          ? "bg-amber-950/60 text-amber-400 border-amber-800"
+                          : "bg-zinc-800 text-zinc-400 border-zinc-700"
+                      }`}
+                    >
+                      {req.priority === "must" ? "Must Have" : "Nice to Have"}
+                    </span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </main>

@@ -5,6 +5,7 @@ import {
   getKitById,
   updateKit,
   deleteKit,
+  extractRequirementsForKit,
 } from "../controllers/kit.controller";
 import { requireAuth } from "../middleware/auth.middleware";
 
@@ -18,5 +19,6 @@ router.get("/", listKits);
 router.get("/:id", getKitById);
 router.patch("/:id", updateKit);
 router.delete("/:id", deleteKit);
+router.post("/:id/requirements/extract", extractRequirementsForKit);
 
 export default router;

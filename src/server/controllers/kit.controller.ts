@@ -1,11 +1,13 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
-import { Kit, KitDocument } from "../models/Kit";
+import { Kit, KitDocument, IRequirementDoc } from "../models/Kit";
 import {
   createKitSchema,
   updateKitSchema,
+  extractRequirementsSchema,
   validateKitInvariants,
 } from "../validations/kit.validation";
+import { extractRequirementsFromJD } from "../services/requirement-extraction.service";
 
 function formatKit(doc: KitDocument) {
   return {
@@ -329,3 +331,102 @@ export async function deleteKit(req: Request, res: Response): Promise<void> {
     });
   }
 }
+
+export async function extractRequirementsForKit(
+  req: Request,
+  res: Response
+): Promise<void> {
+  const id = getParamId(req.params.id || req.params.kitId);
+
+  if (!id) {
+    res.status(404).json({
+      success: false,
+      error: {
+        code: "KIT_NOT_FOUND",
+        message: "Interview kit not found.",
+      },
+    });
+    return;
+  }
+
+  const parseResult = extractRequirementsSchema.safeParse(req.body);
+  if (!parseResult.success) {
+    res.status(400).json({
+      success: false,
+      error: {
+        code: "VALIDATION_ERROR",
+        message: parseResult.error.issues[0]?.message || "Invalid input data.",
+      },
+    });
+    return;
+  }
+
+  const { jobDescription } = parseResult.data;
+
+  try {
+    // 1. Verify Kit exists and belongs to authenticated user (ownership isolation)
+    const kit = await Kit.findOne({
+      _id: id,
+      userId: req.userId,
+    });
+
+    if (!kit) {
+      res.status(404).json({
+        success: false,
+        error: {
+          code: "KIT_NOT_FOUND",
+          message: "Interview kit not found.",
+        },
+      });
+      return;
+    }
+
+    // 2. Call the Stage 5.2 extraction service
+    let extractionResult;
+    try {
+      extractionResult = await extractRequirementsFromJD(jobDescription);
+    } catch (serviceError) {
+      console.error("[Kit] Extraction service error:", serviceError);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: "EXTRACTION_FAILED",
+          message:
+            "Failed to extract requirements from job description. Please try again.",
+        },
+      });
+      return;
+    }
+
+    // 3. Format requirements with kitId and populate subdocuments
+    const newRequirements: IRequirementDoc[] =
+      extractionResult.requirements.map((r) => ({
+        id: r.id,
+        kitId: kit._id,
+        text: r.text,
+        kind: r.kind,
+        priority: r.priority,
+      }));
+
+    // 4. Update the kit's requirements (clean replacement, deterministic IDs)
+    kit.requirements = newRequirements;
+    kit.jobDescription = jobDescription;
+
+    await kit.save();
+
+    res.status(200).json({
+      success: true,
+      requirements: kit.requirements,
+    });
+  } catch (error) {
+    console.error("[Kit] Extract requirements error:", error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: "INTERNAL_SERVER_ERROR",
+        message: "An unexpected error occurred during requirement extraction.",
+      },
+    });
+  }
+}
+

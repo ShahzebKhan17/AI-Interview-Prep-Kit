@@ -83,6 +83,7 @@ export class OpenAiLlmService implements ILlmService {
         Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30000),
     });
 
     if (!response.ok) {
@@ -229,10 +230,23 @@ export class MockLlmService implements ILlmService {
   }
 }
 
+let activeLlmService: ILlmService | null = null;
+
+/**
+ * Overrides the active LLM service instance. Useful for tests and mocks.
+ */
+export function setLlmService(service: ILlmService | null): void {
+  activeLlmService = service;
+}
+
 /**
  * Returns the default LLM service based on environment configuration.
  */
 export function getDefaultLlmService(): ILlmService {
+  if (activeLlmService) {
+    return activeLlmService;
+  }
+
   if (
     process.env.MOCK_LLM === "true" ||
     process.env.NODE_ENV === "test"

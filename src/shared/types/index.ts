@@ -126,6 +126,7 @@ export interface KitResponse {
   success: boolean;
   kit?: IKit;
   kits?: IKit[];
+  requirements?: IRequirement[];
   message?: string;
   error?: {
     code: string;
