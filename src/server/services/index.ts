@@ -6,4 +6,8 @@ export * from "./crawler/interview-search";
 export * from "./crawler/company-research.service";
 export * from "./question-generation.service";
 export * from "./coverage.service";
+export * from "./role-extraction.service";
+export * from "./scheduling.service";
+export * from "./flashcard-generation.service";
+export * from "./kit-pipeline.service";
 

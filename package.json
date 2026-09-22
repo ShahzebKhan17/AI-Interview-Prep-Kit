@@ -12,6 +12,8 @@
     "start": "concurrently \"npm run start:server\" \"npm run start:client\"",
     "start:client": "next start src/client",
     "start:server": "node dist/server/index.js",
+    "evaluate": "tsx src/evaluator/cli.ts",
+    "test": "tsx --test test/**/*.test.ts",
     "lint": "eslint ."
   },
   "dependencies": {

@@ -26,8 +26,11 @@ export const DEFAULT_MAX_BYTES = 1.5 * 1024 * 1024; // 1.5 MB
 
 /**
  * Validates whether an IP address is private, loopback, link-local, or otherwise reserved.
+ * When allowLoopback is true, loopback addresses (127.0.0.0/8, ::1) are permitted,
+ * while other private ranges (10/8, 172.16/12, 192.168/16, 169.254/16, fc00::/7, fe80::/10, etc.)
+ * remain strictly blocked.
  */
-export function isPrivateOrReservedIp(ip: string): boolean {
+export function isPrivateOrReservedIp(ip: string, allowLoopback = false): boolean {
   if (!net.isIP(ip)) {
     return true; // Not a valid IP
   }
@@ -42,7 +45,7 @@ export function isPrivateOrReservedIp(ip: string): boolean {
     // 10.0.0.0/8 (Private RFC1918)
     if (b0 === 10) return true;
     // 127.0.0.0/8 (Loopback)
-    if (b0 === 127) return true;
+    if (b0 === 127) return !allowLoopback;
     // 169.254.0.0/16 (Link-local / AWS & Cloud Metadata: 169.254.169.254)
     if (b0 === 169 && b1 === 254) return true;
     // 172.16.0.0/12 (Private RFC1918: 172.16.0.0 - 172.31.255.255)
@@ -63,7 +66,7 @@ export function isPrivateOrReservedIp(ip: string): boolean {
   if (net.isIPv6(ip)) {
     const lower = ip.toLowerCase();
     // ::1 (Loopback)
-    if (lower === "::1" || lower === "0000:0000:0000:0000:0000:0000:0000:0001") return true;
+    if (lower === "::1" || lower === "0000:0000:0000:0000:0000:0000:0000:0001") return !allowLoopback;
     // fe80::/10 (Link-local)
     if (lower.startsWith("fe8") || lower.startsWith("fe9") || lower.startsWith("fea") || lower.startsWith("feb")) return true;
     // fc00::/7 (Unique local address / private)
@@ -74,7 +77,7 @@ export function isPrivateOrReservedIp(ip: string): boolean {
     if (lower.includes("::ffff:")) {
       const ipv4Part = lower.split("::ffff:")[1];
       if (ipv4Part && net.isIPv4(ipv4Part)) {
-        return isPrivateOrReservedIp(ipv4Part);
+        return isPrivateOrReservedIp(ipv4Part, allowLoopback);
       }
     }
     return false;
@@ -83,12 +86,20 @@ export function isPrivateOrReservedIp(ip: string): boolean {
   return true;
 }
 
+export interface SafeUrlOptions {
+  allowLocalAddresses?: boolean;
+}
+
 /**
  * Validates a URL against strict SSRF constraints:
  * - Scheme must be http: or https:
  * - Hostname must not resolve to private, loopback, or metadata addresses
+ * - In evaluator mode (allowLocalAddresses = true), localhost and 127.0.0.1/::1 are permitted,
+ *   while cloud metadata and private networks remain blocked.
  */
-export async function validateSafeUrl(urlStr: string): Promise<URL> {
+export async function validateSafeUrl(urlStr: string, options?: SafeUrlOptions): Promise<URL> {
+  const allowLocal = options?.allowLocalAddresses ?? false;
+
   let parsed: URL;
   try {
     parsed = new URL(urlStr);
@@ -103,18 +114,19 @@ export async function validateSafeUrl(urlStr: string): Promise<URL> {
 
   const hostname = parsed.hostname;
 
-  // 2. Reject explicit localhost
-  if (
+  // 2. Reject explicit localhost unless allowLocalAddresses is enabled
+  const isLocalDomain =
     hostname.toLowerCase() === "localhost" ||
     hostname.toLowerCase().endsWith(".localhost") ||
-    hostname.toLowerCase().endsWith(".local")
-  ) {
+    hostname.toLowerCase().endsWith(".local");
+
+  if (isLocalDomain && !allowLocal) {
     throw new Error(`Access to local domains is prohibited: ${hostname}`);
   }
 
   // 3. Resolve DNS and inspect resolved IP addresses
   if (net.isIP(hostname)) {
-    if (isPrivateOrReservedIp(hostname)) {
+    if (isPrivateOrReservedIp(hostname, allowLocal)) {
       throw new Error(`Access to private/loopback/cloud-metadata IP is prohibited: ${hostname}`);
     }
   } else {
@@ -124,7 +136,7 @@ export async function validateSafeUrl(urlStr: string): Promise<URL> {
         throw new Error(`DNS lookup yielded no addresses for ${hostname}`);
       }
       for (const addr of addresses) {
-        if (isPrivateOrReservedIp(addr.address)) {
+        if (isPrivateOrReservedIp(addr.address, allowLocal)) {
           throw new Error(`Host '${hostname}' resolved to prohibited IP: ${addr.address}`);
         }
       }
@@ -134,7 +146,7 @@ export async function validateSafeUrl(urlStr: string): Promise<URL> {
       }
       // Allow hermetic offline testing for mock domain names in test environment
       if (
-        process.env.NODE_ENV === "test" &&
+        (process.env.NODE_ENV === "test" || allowLocal) &&
         ((err as NodeJS.ErrnoException).code === "EAI_AGAIN" ||
           (err as NodeJS.ErrnoException).code === "ENOTFOUND")
       ) {
@@ -147,15 +159,29 @@ export async function validateSafeUrl(urlStr: string): Promise<URL> {
   return parsed;
 }
 
+export interface SafeWebFetcherOptions {
+  userAgent?: string;
+  allowLocalAddresses?: boolean;
+}
+
 /**
  * Production Web Fetcher enforcing SSRF security, content-type checking,
  * redirect validation, byte limits, and timeouts.
  */
 export class SafeWebFetcher implements IWebFetcher {
   private userAgent: string;
+  private allowLocalAddresses: boolean;
 
-  constructor(userAgent = "AI-Interview-Prep-Kit-Crawler/1.0 (+https://example.com/bot)") {
-    this.userAgent = userAgent;
+  constructor(optionsOrUserAgent?: string | SafeWebFetcherOptions) {
+    if (typeof optionsOrUserAgent === "string") {
+      this.userAgent = optionsOrUserAgent;
+      this.allowLocalAddresses = false;
+    } else {
+      this.userAgent =
+        optionsOrUserAgent?.userAgent ||
+        "AI-Interview-Prep-Kit-Crawler/1.0 (+https://example.com/bot)";
+      this.allowLocalAddresses = optionsOrUserAgent?.allowLocalAddresses ?? false;
+    }
   }
 
   async fetch(urlStr: string, options: FetchOptions = {}): Promise<FetchResult> {
@@ -168,7 +194,9 @@ export class SafeWebFetcher implements IWebFetcher {
 
     while (redirectCount <= maxRedirects) {
       // Validate every redirect destination through SSRF checks
-      const validUrl = await validateSafeUrl(currentUrl);
+      const validUrl = await validateSafeUrl(currentUrl, {
+        allowLocalAddresses: this.allowLocalAddresses,
+      });
 
       const response = await fetch(validUrl.toString(), {
         method: "GET",
@@ -273,7 +301,9 @@ export class SafeWebFetcher implements IWebFetcher {
    */
   async isAllowedByRobots(targetUrlStr: string, options: FetchOptions = {}): Promise<boolean> {
     try {
-      const parsed = await validateSafeUrl(targetUrlStr);
+      const parsed = await validateSafeUrl(targetUrlStr, {
+        allowLocalAddresses: this.allowLocalAddresses,
+      });
       const robotsUrl = `${parsed.protocol}//${parsed.host}/robots.txt`;
 
       const result = await this.fetch(robotsUrl, {
@@ -330,10 +360,12 @@ export class SafeWebFetcher implements IWebFetcher {
 export class MockWebFetcher implements IWebFetcher {
   private fixtures: Map<string, { status: number; contentType: string; body: string; finalUrl?: string }>;
   private disallowedRobots: Set<string>;
+  private allowLocalAddresses: boolean;
 
-  constructor() {
+  constructor(options?: { allowLocalAddresses?: boolean }) {
     this.fixtures = new Map();
     this.disallowedRobots = new Set();
+    this.allowLocalAddresses = options?.allowLocalAddresses ?? false;
   }
 
   setFixture(url: string, data: { status?: number; contentType?: string; body: string; finalUrl?: string }): void {
@@ -351,7 +383,7 @@ export class MockWebFetcher implements IWebFetcher {
 
   async fetch(urlStr: string, options?: FetchOptions): Promise<FetchResult> {
     // Enforce SSRF validation even in MockWebFetcher to verify security behavior
-    await validateSafeUrl(urlStr);
+    await validateSafeUrl(urlStr, { allowLocalAddresses: this.allowLocalAddresses });
 
     const fixture = this.fixtures.get(urlStr);
     if (!fixture) {

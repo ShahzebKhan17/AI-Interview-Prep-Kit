@@ -12,6 +12,7 @@ export interface QuestionGenerationInput {
 
 export interface QuestionGenerationServiceOptions {
   llmService?: ILlmService;
+  startIndex?: number;
 }
 
 /**
@@ -289,8 +290,9 @@ Please correct this issue:
   }
 
   // --- Application-Controlled Sequential ID Assignment ---
+  const startId = options.startIndex ?? 1;
   const finalQuestions: IQuestion[] = parsedQuestions.map((q, idx) => {
-    const seqNum = String(idx + 1).padStart(3, "0");
+    const seqNum = String(startId + idx).padStart(3, "0");
     return {
       id: `Q-${seqNum}`,
       category: q.category,

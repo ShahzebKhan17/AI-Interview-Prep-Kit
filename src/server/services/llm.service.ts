@@ -130,9 +130,115 @@ export class MockLlmService implements ILlmService {
       return this.customHandler(options);
     }
 
-    // Default heuristic extraction based on user prompt content
     const rawText = options.userPrompt;
+    const systemPrompt = options.systemPrompt || "";
+
+    // 1. Question generation heuristic
+    if (
+      rawText.includes("<requirements>") ||
+      systemPrompt.includes("interview question bank")
+    ) {
+      return this.heuristicGenerateQuestions(rawText);
+    }
+
+    // 2. Flashcards heuristic
+    if (
+      systemPrompt.includes("flashcards") ||
+      rawText.includes("Generate targeted interview preparation flashcards")
+    ) {
+      return this.heuristicGenerateFlashcards(rawText);
+    }
+
+    // 3. Company research heuristic
+    if (
+      systemPrompt.includes("technical company analyst") ||
+      rawText.includes("Research Evidence Collected:")
+    ) {
+      return this.heuristicCompanyResearch();
+    }
+
+    // Default: Requirement extraction from JD
     return this.heuristicExtract(rawText);
+  }
+
+  private heuristicGenerateQuestions(text: string): string {
+    const reqRegex = /\[(REQ-\d+|r\d+|[A-Z0-9_-]+)\]\s*\(Kind:\s*([a-zA-Z]+),\s*Priority:\s*([a-zA-Z]+)\):\s*(.+)/gi;
+    const questions: Array<{
+      category: "technical" | "behavioral" | "roleSpecific" | "company";
+      question: string;
+      answerOutline: string;
+      requirementIds: string[];
+    }> = [];
+
+    let match: RegExpExecArray | null;
+    while ((match = reqRegex.exec(text)) !== null) {
+      const id = match[1].trim();
+      const kind = match[2].trim().toLowerCase();
+      const reqText = match[4].trim();
+
+      let category: "technical" | "behavioral" | "roleSpecific" = "technical";
+      if (kind === "behavioral") {
+        category = "behavioral";
+      } else if (kind === "domain") {
+        category = "roleSpecific";
+      }
+
+      questions.push({
+        category,
+        question: `How would you demonstrate your expertise in ${reqText}?`,
+        answerOutline: `Candidate should demonstrate hands-on depth with ${reqText}, discussing architectural trade-offs, edge cases, and best practices.`,
+        requirementIds: [id],
+      });
+    }
+
+    // Check if company context is present
+    const hasCompany =
+      text.includes("<company_context>") &&
+      !text.includes("<company_context>\nNone available.") &&
+      !text.includes("<company_context>\nNone available.\n</company_context>");
+
+    if (hasCompany) {
+      questions.push({
+        category: "company",
+        question: "Why are you interested in joining our company and how does your background align with our mission?",
+        answerOutline: "Candidate should mention key company initiatives, alignment with company values, and passion for the product domain.",
+        requirementIds: [],
+      });
+    }
+
+    return JSON.stringify({ questions });
+  }
+
+  private heuristicGenerateFlashcards(text: string): string {
+    const reqRegex = /\[(REQ-\d+|r\d+|[A-Z0-9_-]+)\]\s*\(Kind:\s*([a-zA-Z]+),\s*Priority:\s*([a-zA-Z]+)\):\s*(.+)/gi;
+    const flashcards: Array<{
+      front: string;
+      back: string;
+      requirement_id: string;
+    }> = [];
+
+    let match: RegExpExecArray | null;
+    while ((match = reqRegex.exec(text)) !== null) {
+      const id = match[1].trim();
+      const reqText = match[4].trim();
+
+      flashcards.push({
+        front: `Core concept: ${reqText}`,
+        back: `Key principles, performance considerations, and interview discussion points for ${reqText}.`,
+        requirement_id: id,
+      });
+    }
+
+    return JSON.stringify({ flashcards });
+  }
+
+  private heuristicCompanyResearch(): string {
+    return JSON.stringify({
+      summary: "",
+      productsOrServices: [],
+      industry: "",
+      hiringProcess: null,
+    });
   }
 
   private heuristicExtract(text: string): string {
