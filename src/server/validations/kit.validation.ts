@@ -8,7 +8,11 @@ export const createKitSchema = z.object({
     .trim()
     .min(1, "Title is required")
     .max(200, "Title cannot exceed 200 characters"),
-  jobDescription: z.string().trim().min(1, "Job description is required"),
+  jobDescription: z
+    .string()
+    .trim()
+    .min(1, "Job description is required")
+    .max(50000, "Job description cannot exceed 50,000 characters"),
   companyUrl: z
     .string()
     .trim()
@@ -20,7 +24,11 @@ export const createKitSchema = z.object({
 });
 
 export const extractRequirementsSchema = z.object({
-  jobDescription: z.string().trim().min(1, "Job description is required"),
+  jobDescription: z
+    .string()
+    .trim()
+    .min(1, "Job description is required")
+    .max(50000, "Job description cannot exceed 50,000 characters"),
 });
 
 export const researchKitSchema = z.object({
@@ -98,7 +106,12 @@ export const studyDaySchema = z.object({
 
 export const updateKitSchema = z.object({
   title: z.string().trim().min(1).max(200).optional(),
-  jobDescription: z.string().trim().min(1).optional(),
+  jobDescription: z
+    .string()
+    .trim()
+    .min(1)
+    .max(50000, "Job description cannot exceed 50,000 characters")
+    .optional(),
   companyUrl: z
     .string()
     .trim()
