@@ -182,47 +182,97 @@ export async function extractRequirementsFromJD(
   }
 
   const llm = options?.llmService || getDefaultLlmService();
+  const initialUserPrompt = buildExtractionUserPrompt(trimmedJD);
 
-  const completion = await llm.generateCompletion({
+  let validationData: z.infer<typeof rawLlmExtractionSchema> | null = null;
+  let lastValidationError: string | null = null;
+
+  // Helper to parse JSON with markdown fence unwrapping
+  const parseExtractionJson = (rawText: string): unknown => {
+    try {
+      return JSON.parse(rawText);
+    } catch {
+      const match = rawText.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      if (match) {
+        return JSON.parse(match[1]);
+      }
+      throw new Error("LLM returned an invalid JSON structure that could not be parsed.");
+    }
+  };
+
+  // --- Attempt 1 ---
+  const completion1 = await llm.generateCompletion({
     systemPrompt: EXTRACTION_SYSTEM_PROMPT,
-    userPrompt: buildExtractionUserPrompt(trimmedJD),
+    userPrompt: initialUserPrompt,
     responseFormat: "json_object",
     temperature: 0.1,
   });
 
-  // Parse JSON response
-  let parsedJson: unknown;
   try {
-    parsedJson = JSON.parse(completion);
-  } catch {
-    // Handle potential markdown backticks (e.g. ```json ... ```)
-    const match = completion.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-    if (match) {
-      try {
-        parsedJson = JSON.parse(match[1]);
-      } catch {
-        throw new Error(
-          "LLM returned an invalid JSON structure that could not be parsed."
-        );
-      }
+    const rawOutput1 = parseExtractionJson(completion1);
+    const v1 = rawLlmExtractionSchema.safeParse(rawOutput1);
+    if (v1.success) {
+      validationData = v1.data;
     } else {
-      throw new Error(
-        "LLM returned an invalid JSON structure that could not be parsed."
-      );
+      lastValidationError = `Schema validation failed: ${v1.error.issues[0]?.message}`;
+    }
+  } catch (err) {
+    lastValidationError = (err as Error).message;
+  }
+
+  // --- Controlled Retry (Attempt 2) on Malformed JSON or Schema Failure ---
+  if (!validationData && lastValidationError) {
+    console.warn(
+      `[RequirementExtraction] Attempt 1 output invalid: ${lastValidationError}. Executing single controlled retry...`
+    );
+
+    const correctivePrompt = `${initialUserPrompt}
+
+IMPORTANT CORRECTION REQUIRED:
+Your previous response failed validation with the following error:
+"${lastValidationError}"
+
+Please correct this issue:
+- Output MUST be a valid JSON object only.
+- Match this schema exactly:
+{
+  "requirements": [
+    {
+      "text": "string",
+      "kind": "technical" | "behavioral" | "domain",
+      "priority": "must" | "nice"
+    }
+  ]
+}
+- Extract explicit requirements directly supported by the Job Description.`;
+
+    const completion2 = await llm.generateCompletion({
+      systemPrompt: EXTRACTION_SYSTEM_PROMPT,
+      userPrompt: correctivePrompt,
+      responseFormat: "json_object",
+      temperature: 0.1,
+    });
+
+    try {
+      const rawOutput2 = parseExtractionJson(completion2);
+      const v2 = rawLlmExtractionSchema.safeParse(rawOutput2);
+      if (v2.success) {
+        validationData = v2.data;
+      } else {
+        lastValidationError = `Retry schema validation failed: ${v2.error.issues[0]?.message}`;
+      }
+    } catch (err) {
+      lastValidationError = (err as Error).message;
     }
   }
 
-  // Validate structured LLM response with Zod
-  const validation = rawLlmExtractionSchema.safeParse(parsedJson);
-  if (!validation.success) {
-    const errorMsg =
-      validation.error.issues[0]?.message || "Schema validation failed";
-    throw new Error(`LLM extraction output failed validation: ${errorMsg}`);
+  if (!validationData) {
+    throw new Error(`LLM extraction output failed validation: ${lastValidationError || "Schema validation failed"}`);
   }
 
   // Normalize, deduplicate, and assign deterministic IDs (REQ-001, REQ-002, ...)
   const requirements = normalizeAndAssignRequirementIds(
-    validation.data.requirements
+    validationData.requirements
   );
 
   return {

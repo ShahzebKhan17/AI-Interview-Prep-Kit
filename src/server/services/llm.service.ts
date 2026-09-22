@@ -20,7 +20,11 @@ export interface OpenAiConfig {
   apiKey?: string;
   model?: string;
   baseUrl?: string;
+  initialRetryDelayMs?: number;
+  maxRetries?: number;
 }
+
+const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 
 /**
  * OpenAI API client implementation using standard fetch.
@@ -30,6 +34,8 @@ export class OpenAiLlmService implements ILlmService {
   private apiKey: string;
   private model: string;
   private baseUrl: string;
+  private initialRetryDelayMs: number;
+  private maxRetries: number;
 
   constructor(config?: OpenAiConfig) {
     this.apiKey = config?.apiKey || process.env.OPENAI_API_KEY || "";
@@ -39,6 +45,23 @@ export class OpenAiLlmService implements ILlmService {
       process.env.OPENAI_BASE_URL ||
       "https://api.openai.com/v1"
     ).replace(/\/+$/, "");
+    this.initialRetryDelayMs = config?.initialRetryDelayMs ?? 1000;
+    this.maxRetries = config?.maxRetries ?? 3;
+  }
+
+  private getRetryDelayMs(attempt: number, retryAfterHeader?: string | null): number {
+    if (retryAfterHeader) {
+      const parsedSeconds = parseInt(retryAfterHeader, 10);
+      if (!isNaN(parsedSeconds) && parsedSeconds > 0) {
+        // Cap Retry-After header delay at 10 seconds to avoid blocking batch evaluation excessively
+        return Math.min(parsedSeconds * 1000, 10000);
+      }
+    }
+
+    // Exponential backoff: baseDelay * 2^attempt (e.g. 1000ms, 2000ms, 4000ms) with small jitter
+    const jitter = Math.floor(Math.random() * 200);
+    const delay = this.initialRetryDelayMs * Math.pow(2, attempt) + jitter;
+    return Math.min(delay, 10000);
   }
 
   async generateCompletion(options: LlmCompletionOptions): Promise<string> {
@@ -76,41 +99,60 @@ export class OpenAiLlmService implements ILlmService {
       body.max_tokens = options.maxTokens;
     }
 
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30000),
-    });
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      const response = await fetch(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(30000),
+      });
 
-    if (!response.ok) {
-      let errorDetails = "";
-      try {
-        const errorJson = (await response.json()) as {
-          error?: { message?: string };
-        };
-        errorDetails = errorJson.error?.message || response.statusText;
-      } catch {
-        errorDetails = response.statusText;
+      if (!response.ok) {
+        let errorDetails = "";
+        try {
+          const errorJson = (await response.json()) as {
+            error?: { message?: string };
+          };
+          errorDetails = errorJson.error?.message || response.statusText;
+        } catch {
+          errorDetails = response.statusText;
+        }
+
+        const isRetryable = RETRYABLE_STATUS_CODES.has(response.status);
+
+        if (isRetryable && attempt < this.maxRetries) {
+          const delayMs = this.getRetryDelayMs(
+            attempt,
+            response.headers.get("retry-after")
+          );
+          console.warn(
+            `[OpenAiLlmService] Received retryable status ${response.status}. Retrying in ${delayMs}ms (attempt ${attempt + 1}/${this.maxRetries})...`
+          );
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
+
+        throw new Error(
+          `OpenAI API request failed (${response.status}): ${errorDetails}`
+        );
       }
-      throw new Error(
-        `OpenAI API request failed (${response.status}): ${errorDetails}`
-      );
+
+      const data = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string } }>;
+      };
+
+      const content = data.choices?.[0]?.message?.content;
+      if (typeof content !== "string") {
+        throw new Error("OpenAI API returned an empty or invalid completion.");
+      }
+
+      return content;
     }
 
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
-    };
-
-    const content = data.choices?.[0]?.message?.content;
-    if (typeof content !== "string") {
-      throw new Error("OpenAI API returned an empty or invalid completion.");
-    }
-
-    return content;
+    throw new Error("OpenAI API request failed after retries.");
   }
 }
 

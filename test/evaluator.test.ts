@@ -20,7 +20,8 @@ import {
 import {
   runBatchEvaluation,
 } from "../src/evaluator/evaluator";
-import { MockLlmService } from "../src/server/services/llm.service";
+import { MockLlmService, OpenAiLlmService } from "../src/server/services/llm.service";
+import { extractRequirementsFromJD } from "../src/server/services/requirement-extraction.service";
 
 describe("Stage 9 — SSRF Security and Localhost Boundary", () => {
   test("SSRF: rejects private IPv4 ranges (10/8, 172.16/12, 192.168/16)", () => {
@@ -558,6 +559,264 @@ Requirements:
     assert.strictEqual(kit.role.title, "Senior Engineer");
     // Ensure MongoDB connection remained disconnected (readyState 0) throughout
     assert.strictEqual(mongoose.default.connection.readyState, 0);
+  });
+});
+
+describe("Stage 10 — Edge Cases and Failure Handling", () => {
+  test("LLM Provider: retries on HTTP 429 and succeeds on attempt 2", async () => {
+    const originalFetch = globalThis.fetch;
+    let callCount = 0;
+    try {
+      globalThis.fetch = async () => {
+        callCount++;
+        if (callCount === 1) {
+          return new Response(JSON.stringify({ error: { message: "Rate limit exceeded" } }), {
+            status: 429,
+            headers: { "Content-Type": "application/json", "retry-after": "0" },
+          });
+        }
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: "{\"result\": \"success\"}" } }] }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      };
+
+      const llm = new OpenAiLlmService({
+        apiKey: "test-api-key",
+        initialRetryDelayMs: 1,
+      });
+
+      const res = await llm.generateCompletion({ userPrompt: "Test 429 prompt" });
+      assert.strictEqual(res, "{\"result\": \"success\"}");
+      assert.strictEqual(callCount, 2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("LLM Provider: retries on transient HTTP 503 and succeeds on attempt 2", async () => {
+    const originalFetch = globalThis.fetch;
+    let callCount = 0;
+    try {
+      globalThis.fetch = async () => {
+        callCount++;
+        if (callCount === 1) {
+          return new Response(JSON.stringify({ error: { message: "Service Unavailable" } }), {
+            status: 503,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(
+          JSON.stringify({ choices: [{ message: { content: "Recovered from 503" } }] }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }
+        );
+      };
+
+      const llm = new OpenAiLlmService({
+        apiKey: "test-api-key",
+        initialRetryDelayMs: 1,
+      });
+
+      const res = await llm.generateCompletion({ userPrompt: "Test 503 prompt" });
+      assert.strictEqual(res, "Recovered from 503");
+      assert.strictEqual(callCount, 2);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("LLM Provider: does NOT retry permanent 4xx errors (e.g. 401 Unauthorized)", async () => {
+    const originalFetch = globalThis.fetch;
+    let callCount = 0;
+    try {
+      globalThis.fetch = async () => {
+        callCount++;
+        return new Response(JSON.stringify({ error: { message: "Invalid API key" } }), {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+
+      const llm = new OpenAiLlmService({
+        apiKey: "invalid-key",
+        initialRetryDelayMs: 1,
+      });
+
+      await assert.rejects(
+        async () => llm.generateCompletion({ userPrompt: "Test 401 prompt" }),
+        /OpenAI API request failed \(401\)/
+      );
+      // Confirms exactly 1 call was made and NO retries occurred
+      assert.strictEqual(callCount, 1);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("Requirement Extraction: retries on malformed JSON and succeeds on attempt 2", async () => {
+    let callCount = 0;
+    const mockLlm = new MockLlmService(() => {
+      callCount++;
+      if (callCount === 1) {
+        // Attempt 1: Malformed JSON output
+        return "Not valid json { requirements: [ broken";
+      }
+      // Attempt 2: Valid JSON
+      return JSON.stringify({
+        requirements: [
+          { text: "Python and Django proficiency", kind: "technical", priority: "must" },
+        ],
+      });
+    });
+
+    const result = await extractRequirementsFromJD("Backend Engineer\n- Python and Django proficiency (must)", {
+      llmService: mockLlm,
+    });
+
+    assert.strictEqual(callCount, 2);
+    assert.strictEqual(result.requirements.length, 1);
+    assert.strictEqual(result.requirements[0].id, "REQ-001");
+    assert.strictEqual(result.requirements[0].text, "Python and Django proficiency");
+  });
+
+  test("Requirement Extraction: fails after exactly 2 attempts if output remains invalid", async () => {
+    let callCount = 0;
+    const mockLlm = new MockLlmService(() => {
+      callCount++;
+      // Always return invalid structure
+      return "{ invalid: true }";
+    });
+
+    await assert.rejects(
+      async () =>
+        extractRequirementsFromJD("Backend Engineer\n- Python and Django proficiency (must)", {
+          llmService: mockLlm,
+        }),
+      /LLM extraction output failed validation/
+    );
+
+    // Exactly 2 attempts (Attempt 1 + Attempt 2) occurred
+    assert.strictEqual(callCount, 2);
+  });
+
+  test("Thin Job Description: extracts only the explicit requirement and produces a valid kit", async () => {
+    const mockFetcher = new MockWebFetcher({ allowLocalAddresses: true });
+    mockFetcher.setFixture("http://localhost:8099/acme/", {
+      body: "<html><head><title>Acme Innovations - Careers</title></head><body>Welcome</body></html>",
+    });
+
+    const thinJd = `Role: Junior Developer
+Location: Remote
+Requirements:
+- Must have basic knowledge of Git (must)`;
+
+    const kit = await generateFullKitPipeline(
+      {
+        id: "case-thin-jd",
+        jd: thinJd,
+        company_url: "http://localhost:8099/acme/",
+        days: 3,
+      },
+      {
+        webFetcher: mockFetcher,
+        llmService: new MockLlmService(),
+      }
+    );
+
+    // Verify only the 1 requirement exists and no requirements were fabricated
+    assert.strictEqual(kit.role.requirements.length, 1);
+    assert.strictEqual(kit.role.requirements[0].id, "r1");
+    assert.ok(kit.role.requirements[0].text.toLowerCase().includes("git"));
+
+    // Verify questions and flashcards are grounded strictly in this 1 requirement
+    assert.strictEqual(kit.questions.length, 1);
+    assert.strictEqual(kit.questions[0].id, "q1");
+    assert.deepStrictEqual(kit.questions[0].requirement_ids, ["r1"]);
+
+    assert.strictEqual(kit.flashcards.length, 1);
+    assert.strictEqual(kit.flashcards[0].id, "f1");
+    assert.deepStrictEqual(kit.flashcards[0].requirement_ids, ["r1"]);
+
+    // Verify 3-day schedule is fully allocated without errors
+    assert.strictEqual(kit.schedule.days_available, 3);
+    assert.strictEqual(kit.schedule.days.length, 3);
+    for (const day of kit.schedule.days) {
+      assert.deepStrictEqual(day.question_ids, ["q1"]);
+    }
+  });
+
+  test("Batch Failure Isolation: provider failure in one case does not abort other cases", async () => {
+    const tmpDir = path.resolve("./test/scratch");
+    await fs.mkdir(tmpDir, { recursive: true });
+
+    const inputPath = path.join(tmpDir, "test-provider-fail-cases.json");
+    const outputPath = path.join(tmpDir, "test-provider-fail-kits.json");
+
+    const cases = [
+      {
+        id: "case-success-1",
+        jd: "Senior Backend Engineer\n- Node.js (must)",
+        company_url: "http://localhost:8099/acme/",
+        days: 2,
+      },
+      {
+        id: "case-provider-failure",
+        jd: "DevOps Engineer\n- Kubernetes (must)",
+        company_url: "http://localhost:8099/acme/",
+        days: 2,
+      },
+      {
+        id: "case-success-2",
+        jd: "Frontend Engineer\n- React (must)",
+        company_url: "http://localhost:8099/acme/",
+        days: 2,
+      },
+    ];
+
+    await fs.writeFile(inputPath, JSON.stringify(cases, null, 2), "utf-8");
+
+    const mockFetcher = new MockWebFetcher({ allowLocalAddresses: true });
+    mockFetcher.setFixture("http://localhost:8099/acme/", {
+      body: "<html><body>Acme</body></html>",
+    });
+
+    const failingLlm = new MockLlmService((options) => {
+      if (options.userPrompt.includes("DevOps Engineer")) {
+        throw new Error("OpenAI API request failed (500): Internal Server Error");
+      }
+      return new MockLlmService().generateCompletion(options);
+    });
+
+    const result = await runBatchEvaluation({
+      inputPath,
+      outputPath,
+      webFetcher: mockFetcher,
+      llmService: failingLlm,
+    });
+
+    assert.strictEqual(result.kits.length, 3);
+
+    // Case 1: Succeeded
+    assert.strictEqual(result.kits[0].id, "case-success-1");
+    assert.strictEqual(result.kits[0].status, "ok");
+    assert.ok(result.kits[0].kit !== null);
+
+    // Case 2: Failed due to provider error — isolated as failed, kit: null
+    assert.strictEqual(result.kits[1].id, "case-provider-failure");
+    assert.strictEqual(result.kits[1].status, "failed");
+    assert.strictEqual(result.kits[1].kit, null);
+    assert.ok(result.kits[1].error?.message.includes("OpenAI API request failed (500)"));
+
+    // Case 3: Succeeded despite Case 2's provider failure!
+    assert.strictEqual(result.kits[2].id, "case-success-2");
+    assert.strictEqual(result.kits[2].status, "ok");
+    assert.ok(result.kits[2].kit !== null);
   });
 
   after(async () => {
