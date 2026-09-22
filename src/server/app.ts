@@ -13,6 +13,9 @@ dotenv.config();
 const app = express();
 const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:3000";
 
+// Trust first proxy for PaaS deployments (Render, Railway, Heroku)
+app.set("trust proxy", 1);
+
 // Standard Middlewares
 app.use(
   cors({
