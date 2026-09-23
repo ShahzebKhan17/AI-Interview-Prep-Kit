@@ -1,4 +1,4 @@
-import { IKit, IRequirement, ICompanyBrief, IQuestion, ICoverageReport, KitResponse } from "@shared/types";
+import { IKit, IRequirement, ICompanyBrief, IQuestion, IFlashcard, IStudyDay, ICoverageReport, KitResponse } from "@shared/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
@@ -167,6 +167,8 @@ export async function updateKit(
     questionBank: IQuestion[];
     requirements: IRequirement[];
     companyBrief: ICompanyBrief;
+    flashcards: IFlashcard[];
+    studySchedule: IStudyDay[];
   }>
 ): Promise<IKit> {
   const result = await request<KitResponse>(`/api/kits/${kitId}`, {
@@ -179,5 +181,39 @@ export async function updateKit(
   }
 
   return result.kit;
+}
+
+export async function generateKitFlashcards(
+  kitId: string
+): Promise<IFlashcard[]> {
+  const result = await request<KitResponse>(
+    `/api/kits/${kitId}/flashcards/generate`,
+    {
+      method: "POST",
+    }
+  );
+
+  if (!result.flashcards) {
+    throw new KitApiError("Failed to generate flashcards.");
+  }
+
+  return result.flashcards;
+}
+
+export async function generateKitSchedule(
+  kitId: string
+): Promise<IStudyDay[]> {
+  const result = await request<KitResponse>(
+    `/api/kits/${kitId}/schedule/generate`,
+    {
+      method: "POST",
+    }
+  );
+
+  if (!result.studySchedule) {
+    throw new KitApiError("Failed to generate study schedule.");
+  }
+
+  return result.studySchedule;
 }
 

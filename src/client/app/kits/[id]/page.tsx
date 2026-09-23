@@ -4,8 +4,8 @@ import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "../../../context/AuthContext";
-import { IKit, IRequirement, ISource, IQuestion, ICoverageReport, IRequirementCoverage, QuestionCategory, ContentState } from "@shared/types";
-import { getKit, extractKitRequirements, researchCompanyBrief, generateKitQuestions, getKitCoverage, updateKit, KitApiError } from "../../../lib/kits";
+import { IKit, IRequirement, ISource, IQuestion, IFlashcard, IStudyDay, ICoverageReport, IRequirementCoverage, QuestionCategory, ContentState } from "@shared/types";
+import { getKit, extractKitRequirements, researchCompanyBrief, generateKitQuestions, generateKitFlashcards, generateKitSchedule, getKitCoverage, updateKit, KitApiError } from "../../../lib/kits";
 
 export default function KitDetailsPage() {
   const router = useRouter();
@@ -58,6 +58,29 @@ export default function KitDetailsPage() {
   const [briefHiringProcess, setBriefHiringProcess] = useState("");
   const [savingKit, setSavingKit] = useState(false);
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
+
+  // Flashcards & Practice Mode State
+  const [generatingFlashcards, setGeneratingFlashcards] = useState(false);
+  const [flashcardError, setFlashcardError] = useState<string | null>(null);
+  const [editingFlashcardId, setEditingFlashcardId] = useState<string | null>(null);
+  const [editFlashcardForm, setEditFlashcardForm] = useState({ front: "", back: "" });
+  const [isAddingFlashcard, setIsAddingFlashcard] = useState(false);
+  const [newFlashcardForm, setNewFlashcardForm] = useState({ front: "", back: "" });
+
+  // Practice Mode interactive state
+  const [isPracticeActive, setIsPracticeActive] = useState(false);
+  const [practiceDeck, setPracticeDeck] = useState<IFlashcard[]>([]);
+  const [currentCardIndex, setCurrentCardIndex] = useState(0);
+  const [isCardFlipped, setIsCardFlipped] = useState(false);
+  const [practiceConfidence, setPracticeConfidence] = useState<Record<string, "again" | "good" | "easy">>({});
+  const [isPracticeFinished, setIsPracticeFinished] = useState(false);
+
+  // Study Schedule State
+  const [generatingSchedule, setGeneratingSchedule] = useState(false);
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+
+  // Export State
+  const [copiedExport, setCopiedExport] = useState(false);
 
   const fetchCoverage = useCallback(async (id: string) => {
     setLoadingCoverage(true);
@@ -124,8 +147,9 @@ export default function KitDetailsPage() {
     setGenerationError(null);
 
     try {
-      const questions = await generateKitQuestions(kit.id);
-      setKit((prev) => (prev ? { ...prev, questionBank: questions } : prev));
+      await generateKitQuestions(kit.id);
+      const updatedKit = await getKit(kit.id);
+      setKit(updatedKit);
       fetchCoverage(kit.id);
     } catch (err) {
       setGenerationError(
@@ -302,6 +326,238 @@ export default function KitDetailsPage() {
     }
   };
 
+  const handleGenerateFlashcards = async () => {
+    if (!kit) return;
+    setGeneratingFlashcards(true);
+    setFlashcardError(null);
+    try {
+      const cards = await generateKitFlashcards(kit.id);
+      setKit((prev) => (prev ? { ...prev, flashcards: cards } : prev));
+      setSaveSuccessMessage("Flashcards generated successfully.");
+      setTimeout(() => setSaveSuccessMessage(null), 3000);
+    } catch (err) {
+      setFlashcardError((err as Error)?.message || "Failed to generate flashcards.");
+    } finally {
+      setGeneratingFlashcards(false);
+    }
+  };
+
+  const handleGenerateSchedule = async () => {
+    if (!kit) return;
+    setGeneratingSchedule(true);
+    setScheduleError(null);
+    try {
+      const schedule = await generateKitSchedule(kit.id);
+      setKit((prev) => (prev ? { ...prev, studySchedule: schedule } : prev));
+      setSaveSuccessMessage("Study schedule generated successfully.");
+      setTimeout(() => setSaveSuccessMessage(null), 3000);
+    } catch (err) {
+      setScheduleError((err as Error)?.message || "Failed to generate study schedule.");
+    } finally {
+      setGeneratingSchedule(false);
+    }
+  };
+
+  const handleStartEditFlashcard = (fc: IFlashcard) => {
+    setEditingFlashcardId(fc.id);
+    setEditFlashcardForm({ front: fc.front, back: fc.back });
+  };
+
+  const handleSaveFlashcard = async (fcId: string) => {
+    if (!kit || !kit.flashcards) return;
+    if (!editFlashcardForm.front.trim() || !editFlashcardForm.back.trim()) return;
+    setSavingKit(true);
+    const updated = kit.flashcards.map((f) => {
+      if (f.id === fcId) {
+        return {
+          ...f,
+          front: editFlashcardForm.front.trim(),
+          back: editFlashcardForm.back.trim(),
+          state: (f.state === "pinned" ? "pinned" : "edited") as ContentState,
+        };
+      }
+      return f;
+    });
+
+    try {
+      const savedKit = await updateKit(kit.id, { flashcards: updated });
+      setKit(savedKit);
+      setEditingFlashcardId(null);
+      setSaveSuccessMessage("Flashcard updated successfully.");
+      setTimeout(() => setSaveSuccessMessage(null), 3000);
+    } catch (err) {
+      setFlashcardError((err as Error)?.message || "Failed to update flashcard.");
+    } finally {
+      setSavingKit(false);
+    }
+  };
+
+  const handleTogglePinFlashcard = async (fcId: string) => {
+    if (!kit || !kit.flashcards) return;
+    const updated = kit.flashcards.map((f) => {
+      if (f.id === fcId) {
+        const nextState: ContentState = f.state === "pinned" ? "edited" : "pinned";
+        return { ...f, state: nextState };
+      }
+      return f;
+    });
+    setKit((prev) => (prev ? { ...prev, flashcards: updated } : prev));
+    try {
+      await updateKit(kit.id, { flashcards: updated });
+    } catch (err) {
+      console.error("Failed to pin flashcard:", err);
+    }
+  };
+
+  const handleDeleteFlashcard = async (fcId: string) => {
+    if (!kit || !kit.flashcards) return;
+    if (!confirm("Are you sure you want to delete this flashcard?")) return;
+    const updated = kit.flashcards.filter((f) => f.id !== fcId);
+    setKit((prev) => (prev ? { ...prev, flashcards: updated } : prev));
+    try {
+      await updateKit(kit.id, { flashcards: updated });
+    } catch (err) {
+      console.error("Failed to delete flashcard:", err);
+    }
+  };
+
+  const handleAddFlashcardSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!kit) return;
+    if (!newFlashcardForm.front.trim() || !newFlashcardForm.back.trim()) return;
+
+    setSavingKit(true);
+    const newCard: IFlashcard = {
+      id: "f" + (Date.now() % 100000),
+      front: newFlashcardForm.front.trim(),
+      back: newFlashcardForm.back.trim(),
+      state: "edited",
+    };
+    const updated = [...(kit.flashcards || []), newCard];
+
+    try {
+      const savedKit = await updateKit(kit.id, { flashcards: updated });
+      setKit(savedKit);
+      setIsAddingFlashcard(false);
+      setNewFlashcardForm({ front: "", back: "" });
+      setSaveSuccessMessage("Custom flashcard added to deck.");
+      setTimeout(() => setSaveSuccessMessage(null), 3000);
+    } catch (err) {
+      setFlashcardError((err as Error)?.message || "Failed to add flashcard.");
+    } finally {
+      setSavingKit(false);
+    }
+  };
+
+  const startPracticeSession = (weakestFirst = false) => {
+    if (!kit || !kit.flashcards || kit.flashcards.length === 0) return;
+    const deck = [...kit.flashcards];
+    if (weakestFirst) {
+      const weight: Record<string, number> = { again: 0, good: 1, easy: 2 };
+      deck.sort((a, b) => {
+        const scoreA = practiceConfidence[a.id] ? weight[practiceConfidence[a.id]] : -1;
+        const scoreB = practiceConfidence[b.id] ? weight[practiceConfidence[b.id]] : -1;
+        return scoreA - scoreB;
+      });
+    }
+    setPracticeDeck(deck);
+    setCurrentCardIndex(0);
+    setIsCardFlipped(false);
+    setIsPracticeActive(true);
+    setIsPracticeFinished(false);
+  };
+
+  const handleConfidenceRating = (rating: "again" | "good" | "easy") => {
+    const currentCard = practiceDeck[currentCardIndex];
+    if (!currentCard) return;
+
+    setPracticeConfidence((prev) => ({
+      ...prev,
+      [currentCard.id]: rating,
+    }));
+
+    if (currentCardIndex + 1 < practiceDeck.length) {
+      setCurrentCardIndex((prev) => prev + 1);
+      setIsCardFlipped(false);
+    } else {
+      setIsPracticeFinished(true);
+    }
+  };
+
+  const handleExportMarkdown = () => {
+    if (!kit) return;
+    let md = `# Interview Prep Kit: ${kit.title}\n\n`;
+    md += `**Target Company:** ${kit.companyUrl}\n`;
+    md += `**Preparation Window:** ${kit.daysAvailable} Days\n`;
+    md += `**Generated Date:** ${new Date().toLocaleDateString()}\n\n`;
+    md += `---\n\n`;
+
+    if (kit.companyBrief?.summary) {
+      md += `## 1. Company Brief & Interview Insights\n\n`;
+      md += `**Industry:** ${kit.companyBrief.industry || "General Tech"}\n\n`;
+      md += `### Summary\n${kit.companyBrief.summary}\n\n`;
+      if (kit.companyBrief.hiringProcess) {
+        md += `### Hiring Process\n${kit.companyBrief.hiringProcess}\n\n`;
+      }
+    }
+
+    if (kit.requirements && kit.requirements.length > 0) {
+      md += `## 2. Extracted Requirements Checklist\n\n`;
+      for (const r of kit.requirements) {
+        md += `- [ ] **[${r.id}]** (${r.kind.toUpperCase()} | ${r.priority.toUpperCase()}-HAVE): ${r.text}\n`;
+      }
+      md += `\n`;
+    }
+
+    if (kit.questionBank && kit.questionBank.length > 0) {
+      md += `## 3. Question Bank & Answer Guidance\n\n`;
+      kit.questionBank.forEach((q, idx) => {
+        md += `### Q${idx + 1}. [${q.category.toUpperCase()} - ${q.durationMinutes} min] ${q.question}\n\n`;
+        if (q.requirementIds && q.requirementIds.length > 0) {
+          md += `*Linked Requirements: ${q.requirementIds.join(", ")}*\n\n`;
+        }
+        if (q.answerOutline) {
+          md += `**Answer Guidance & Outline:**\n${q.answerOutline}\n\n`;
+        }
+      });
+    }
+
+    if (kit.studySchedule && kit.studySchedule.length > 0) {
+      md += `## 4. Day-by-Day Study Schedule\n\n`;
+      for (const s of kit.studySchedule) {
+        md += `### Day ${s.day}: ${s.topic} (${s.durationMinutes} mins)\n`;
+        if (s.questionIds && s.questionIds.length > 0) {
+          md += `Questions to focus on: ${s.questionIds.join(", ")}\n`;
+        }
+        md += `\n`;
+      }
+    }
+
+    if (kit.flashcards && kit.flashcards.length > 0) {
+      md += `## 5. Flashcards Deck\n\n`;
+      kit.flashcards.forEach((f, idx) => {
+        md += `**Card ${idx + 1} (${f.id})**\n- **Front:** ${f.front}\n- **Back:** ${f.back}\n\n`;
+      });
+    }
+
+    // Trigger download
+    const blob = new Blob([md], { type: "text/markdown;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${kit.title.replace(/[^a-z0-9]/gi, "-").toLowerCase()}-prep-kit.md`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    // Also copy to clipboard
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(md);
+    }
+    setCopiedExport(true);
+    setTimeout(() => setCopiedExport(false), 3000);
+  };
+
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -407,13 +663,24 @@ export default function KitDetailsPage() {
 
         {/* Kit Header Card */}
         <div className="p-8 bg-zinc-900 border border-zinc-800 rounded-xl shadow-lg space-y-4">
-          <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 px-2.5 py-0.5 text-xs rounded-full bg-indigo-950/60 text-indigo-400 border border-indigo-800">
-              Draft Preparation Kit
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-2 px-2.5 py-0.5 text-xs rounded-full bg-indigo-950/60 text-indigo-400 border border-indigo-800">
+                Interview Preparation Kit
+              </div>
+              <h1 className="text-3xl font-bold tracking-tight text-white">
+                {kit.title}
+              </h1>
             </div>
-            <h1 className="text-3xl font-bold tracking-tight text-white">
-              {kit.title}
-            </h1>
+
+            <button
+              type="button"
+              onClick={handleExportMarkdown}
+              className="inline-flex items-center justify-center gap-2 py-2 px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 hover:text-white text-xs font-semibold rounded-lg border border-zinc-700 shadow transition shrink-0"
+              title="Export complete prep kit to a printable markdown document"
+            >
+              <span>{copiedExport ? "✓ Copied & Downloaded!" : "📄 Export Kit (.md)"}</span>
+            </button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 text-sm">
@@ -1222,6 +1489,440 @@ export default function KitDetailsPage() {
                   </div>
                 );
               })}
+            </div>
+          )}
+        </div>
+
+        {/* Flashcards & Practice Mode Section (Stage 7 & Section 6 Builder) */}
+        <div className="p-8 bg-zinc-900 border border-zinc-800 rounded-xl shadow-lg space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2.5">
+                <h2 className="text-lg font-semibold text-white">Flashcards &amp; Practice Mode</h2>
+                {kit.flashcards && kit.flashcards.length > 0 && (
+                  <span className="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-indigo-950/60 text-indigo-400 border border-indigo-800">
+                    {kit.flashcards.length} {kit.flashcards.length === 1 ? "Card" : "Cards"}
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-zinc-400 mt-1">
+                Active recall flashcards for quick revision with confidence-based spaced repetition.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {kit.flashcards && kit.flashcards.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => startPracticeSession(false)}
+                  className="py-1.5 px-3 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg shadow transition cursor-pointer"
+                >
+                  ▶ Start Practice Mode
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={() => setIsAddingFlashcard((prev) => !prev)}
+                className="py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-semibold rounded-lg border border-zinc-700 transition"
+              >
+                {isAddingFlashcard ? "Cancel" : "+ Add Flashcard"}
+              </button>
+
+              <button
+                type="button"
+                onClick={handleGenerateFlashcards}
+                disabled={generatingFlashcards || !kit.requirements || kit.requirements.length === 0}
+                className="py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 disabled:bg-zinc-800 disabled:text-zinc-600 text-zinc-300 text-xs font-medium rounded-lg border border-zinc-700 transition cursor-pointer disabled:cursor-not-allowed"
+              >
+                {generatingFlashcards ? "Generating..." : kit.flashcards && kit.flashcards.length > 0 ? "Regenerate Flashcards" : "Generate Flashcards"}
+              </button>
+            </div>
+          </div>
+
+          {flashcardError && (
+            <div role="alert" className="p-3 text-sm rounded-lg bg-red-950/60 border border-red-800 text-red-300">
+              {flashcardError}
+            </div>
+          )}
+
+          {/* Interactive Practice Mode Screen */}
+          {isPracticeActive && practiceDeck.length > 0 && (
+            <div className="p-6 bg-gradient-to-b from-indigo-950/40 to-zinc-950 border border-indigo-700/60 rounded-xl space-y-5">
+              <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-indigo-400 uppercase tracking-wider">Practice Session</span>
+                  <span className="text-xs text-zinc-400 font-mono">
+                    Card {currentCardIndex + 1} of {practiceDeck.length}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsPracticeActive(false)}
+                  className="text-xs text-zinc-400 hover:text-zinc-200 transition"
+                >
+                  ✕ Exit Practice
+                </button>
+              </div>
+
+              {!isPracticeFinished ? (
+                <div className="space-y-4">
+                  {/* The Flippable Card */}
+                  <div
+                    onClick={() => setIsCardFlipped((prev) => !prev)}
+                    className="min-h-[200px] p-6 bg-zinc-900/90 border border-zinc-700 rounded-xl shadow-xl flex flex-col justify-between cursor-pointer hover:border-indigo-500 transition select-none"
+                  >
+                    <div className="flex items-center justify-between text-xs text-zinc-500">
+                      <span className="font-mono">{practiceDeck[currentCardIndex]?.id}</span>
+                      <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-300 text-[11px]">
+                        {isCardFlipped ? "Answer / Key Concept" : "Question / Prompt (Click to reveal answer)"}
+                      </span>
+                    </div>
+
+                    <div className="my-auto py-4 text-center">
+                      <p className="text-base sm:text-lg font-medium text-white leading-relaxed">
+                        {isCardFlipped
+                          ? practiceDeck[currentCardIndex]?.back
+                          : practiceDeck[currentCardIndex]?.front}
+                      </p>
+                    </div>
+
+                    <div className="text-center text-xs text-indigo-400">
+                      {isCardFlipped ? "🔄 Click to flip back" : "💡 Click to reveal answer"}
+                    </div>
+                  </div>
+
+                  {/* Rating Confidence Controls */}
+                  <div className="p-4 bg-zinc-950 border border-zinc-800 rounded-lg space-y-2">
+                    <p className="text-xs text-center text-zinc-400">How confident did you feel about this card?</p>
+                    <div className="grid grid-cols-3 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => handleConfidenceRating("again")}
+                        className="py-2.5 px-3 bg-red-950/60 hover:bg-red-900/80 border border-red-800/80 text-red-300 text-xs font-semibold rounded-lg transition"
+                      >
+                        🔴 Needs Work (Again)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleConfidenceRating("good")}
+                        className="py-2.5 px-3 bg-amber-950/60 hover:bg-amber-900/80 border border-amber-800/80 text-amber-300 text-xs font-semibold rounded-lg transition"
+                      >
+                        🟡 Felt Okay (Good)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleConfidenceRating("easy")}
+                        className="py-2.5 px-3 bg-emerald-950/60 hover:bg-emerald-900/80 border border-emerald-800/80 text-emerald-300 text-xs font-semibold rounded-lg transition"
+                      >
+                        🟢 Mastered (Easy)
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                /* Practice Finished Summary */
+                <div className="py-6 text-center space-y-4">
+                  <div className="text-4xl">🎉</div>
+                  <h3 className="text-lg font-bold text-white">Practice Session Complete!</h3>
+                  <p className="text-xs text-zinc-400 max-w-md mx-auto">
+                    You have reviewed all {practiceDeck.length} flashcards in this deck. Review cards you marked as needing work to solidify your knowledge.
+                  </p>
+
+                  <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => startPracticeSession(true)}
+                      className="py-2 px-4 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-lg shadow transition"
+                    >
+                      🔄 Practice Weakest Cards First
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => startPracticeSession(false)}
+                      className="py-2 px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs rounded-lg transition"
+                    >
+                      Repeat Full Deck
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setIsPracticeActive(false)}
+                      className="py-2 px-4 bg-zinc-900 hover:bg-zinc-800 text-zinc-400 text-xs rounded-lg transition"
+                    >
+                      Done Practicing
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Add Custom Flashcard Form (The Builder) */}
+          {isAddingFlashcard && (
+            <form onSubmit={handleAddFlashcardSubmit} className="p-4 bg-zinc-950 border border-indigo-900/80 rounded-xl space-y-3">
+              <h3 className="text-xs font-semibold text-indigo-400 uppercase tracking-wider">Add Custom Flashcard</h3>
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">Front (Prompt / Question):</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. What is the difference between optimistic and pessimistic locking?"
+                  value={newFlashcardForm.front}
+                  onChange={(e) => setNewFlashcardForm({ ...newFlashcardForm, front: e.target.value })}
+                  className="w-full p-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-white text-xs focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-zinc-400 mb-1">Back (Answer / Key Takeaway):</label>
+                <textarea
+                  rows={2}
+                  required
+                  placeholder="e.g. Optimistic assumes no conflict occurs and verifies before commit; pessimistic locks the resource immediately."
+                  value={newFlashcardForm.back}
+                  onChange={(e) => setNewFlashcardForm({ ...newFlashcardForm, back: e.target.value })}
+                  className="w-full p-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-white text-xs focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setIsAddingFlashcard(false)}
+                  className="py-1 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded-lg transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingKit}
+                  className="py-1 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 text-white font-medium text-xs rounded-lg transition"
+                >
+                  {savingKit ? "Adding..." : "Add Flashcard"}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Flashcards List Deck */}
+          {!kit.flashcards || kit.flashcards.length === 0 ? (
+            <div className="p-6 bg-zinc-950/60 border border-dashed border-zinc-800 rounded-lg text-center space-y-2">
+              <p className="text-sm text-zinc-400">No flashcards generated yet.</p>
+              <p className="text-xs text-zinc-500">
+                Click &quot;Generate Flashcards&quot; above to create targeted active recall cards.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {kit.flashcards.map((fc: IFlashcard) => {
+                const isEditingThisCard = editingFlashcardId === fc.id;
+                const isPinned = fc.state === "pinned";
+                const isEdited = fc.state === "edited";
+                const confidence = practiceConfidence[fc.id];
+
+                return (
+                  <div
+                    key={fc.id}
+                    className="p-4 bg-zinc-950 border border-zinc-800 hover:border-zinc-700 rounded-xl space-y-2 transition flex flex-col justify-between"
+                  >
+                    <div className="flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-zinc-400 text-[11px]">{fc.id}</span>
+                        {isPinned && (
+                          <span className="px-1.5 py-0.2 text-[10px] rounded bg-indigo-950 text-indigo-300 border border-indigo-800">
+                            📌 Pinned
+                          </span>
+                        )}
+                        {isEdited && !isPinned && (
+                          <span className="px-1.5 py-0.2 text-[10px] rounded bg-amber-950 text-amber-300 border border-amber-800">
+                            ✏️ Edited
+                          </span>
+                        )}
+                        {confidence && (
+                          <span
+                            className={`px-1.5 py-0.2 text-[10px] rounded border ${
+                              confidence === "easy"
+                                ? "bg-emerald-950/60 text-emerald-400 border-emerald-800"
+                                : confidence === "good"
+                                ? "bg-amber-950/60 text-amber-400 border-amber-800"
+                                : "bg-red-950/60 text-red-400 border-red-800"
+                            }`}
+                          >
+                            {confidence === "easy" ? "Mastered" : confidence === "good" ? "Good" : "Needs Work"}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => handleTogglePinFlashcard(fc.id)}
+                          className={`p-1 px-1.5 text-xs rounded transition border ${
+                            isPinned
+                              ? "bg-indigo-900/60 text-indigo-300 border-indigo-700"
+                              : "bg-zinc-800 text-zinc-400 hover:text-zinc-200 border-zinc-700"
+                          }`}
+                          title="Pin flashcard to protect from regeneration"
+                        >
+                          {isPinned ? "📌" : "📍"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleStartEditFlashcard(fc)}
+                          className="p-1 px-2 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded border border-zinc-700 transition"
+                        >
+                          ✏️
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteFlashcard(fc.id)}
+                          className="p-1 px-2 text-xs bg-red-950/40 hover:bg-red-900/60 text-red-400 rounded border border-red-800/80 transition"
+                        >
+                          🗑️
+                        </button>
+                      </div>
+                    </div>
+
+                    {isEditingThisCard ? (
+                      <div className="space-y-2 pt-1 text-xs">
+                        <div>
+                          <label className="block text-zinc-500 mb-0.5">Front:</label>
+                          <textarea
+                            rows={2}
+                            value={editFlashcardForm.front}
+                            onChange={(e) => setEditFlashcardForm({ ...editFlashcardForm, front: e.target.value })}
+                            className="w-full p-2 bg-zinc-900 border border-zinc-700 rounded text-white text-xs focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-zinc-500 mb-0.5">Back:</label>
+                          <textarea
+                            rows={2}
+                            value={editFlashcardForm.back}
+                            onChange={(e) => setEditFlashcardForm({ ...editFlashcardForm, back: e.target.value })}
+                            className="w-full p-2 bg-zinc-900 border border-zinc-700 rounded text-white text-xs focus:outline-none focus:border-indigo-500"
+                          />
+                        </div>
+                        <div className="flex items-center justify-end gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => setEditingFlashcardId(null)}
+                            className="py-1 px-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded transition"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            disabled={savingKit}
+                            onClick={() => handleSaveFlashcard(fc.id)}
+                            className="py-1 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-xs rounded transition"
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-2 text-xs">
+                        <div className="p-2.5 bg-zinc-900/90 rounded border border-zinc-800/60">
+                          <span className="text-[10px] text-zinc-500 uppercase tracking-wider block font-semibold">Q / Front:</span>
+                          <p className="text-zinc-200 mt-0.5">{fc.front}</p>
+                        </div>
+                        <div className="p-2.5 bg-zinc-900/60 rounded border border-zinc-800/40">
+                          <span className="text-[10px] text-indigo-400 uppercase tracking-wider block font-semibold">A / Back:</span>
+                          <p className="text-zinc-300 mt-0.5">{fc.back}</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Study Schedule Roadmap Section (Stage 8 & Section 6 Builder) */}
+        <div className="p-8 bg-zinc-900 border border-zinc-800 rounded-xl shadow-lg space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2.5">
+                <h2 className="text-lg font-semibold text-white">Day-by-Day Study Schedule</h2>
+                {kit.studySchedule && kit.studySchedule.length > 0 && (
+                  <span className="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-emerald-950/60 text-emerald-400 border border-emerald-800">
+                    {kit.studySchedule.length} Days Allocated
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-zinc-400 mt-1">
+                Deterministic allocation spreading interview requirements across your {kit.daysAvailable}-day preparation window.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={handleGenerateSchedule}
+              disabled={generatingSchedule || !kit.questionBank || kit.questionBank.length === 0}
+              className="inline-flex items-center justify-center gap-2 py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 disabled:bg-zinc-800 disabled:text-zinc-600 text-zinc-300 font-medium rounded-lg text-xs transition cursor-pointer disabled:cursor-not-allowed border border-zinc-700 shrink-0"
+            >
+              {generatingSchedule ? (
+                <>
+                  <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-zinc-300 border-t-transparent" />
+                  <span>Allocating...</span>
+                </>
+              ) : kit.studySchedule && kit.studySchedule.length > 0 ? (
+                <span>Regenerate Schedule</span>
+              ) : (
+                <span>Generate Schedule</span>
+              )}
+            </button>
+          </div>
+
+          {scheduleError && (
+            <div role="alert" className="p-3 text-sm rounded-lg bg-red-950/60 border border-red-800 text-red-300">
+              {scheduleError}
+            </div>
+          )}
+
+          {!kit.studySchedule || kit.studySchedule.length === 0 ? (
+            <div className="p-6 bg-zinc-950/60 border border-dashed border-zinc-800 rounded-lg text-center space-y-2">
+              <p className="text-sm text-zinc-400">Study schedule has not been allocated yet.</p>
+              <p className="text-xs text-zinc-500">
+                Generate questions first, then click &quot;Generate Schedule&quot; above to build your daily study roadmap.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {kit.studySchedule.map((day: IStudyDay) => (
+                <div
+                  key={day.day}
+                  className="p-4 bg-zinc-950 border border-zinc-800 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:border-zinc-700 transition"
+                >
+                  <div className="flex items-start gap-3">
+                    <span className="px-2.5 py-1 font-mono text-xs font-bold rounded-lg bg-indigo-950/80 text-indigo-400 border border-indigo-800/80 shrink-0">
+                      Day {day.day}
+                    </span>
+                    <div className="space-y-1">
+                      <h4 className="text-sm font-semibold text-white">{day.topic}</h4>
+                      {day.questionIds && day.questionIds.length > 0 && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                          <span className="text-[11px] text-zinc-500">Practice questions:</span>
+                          {day.questionIds.map((qId: string) => (
+                            <span
+                              key={qId}
+                              className="px-2 py-0.5 font-mono text-[11px] rounded bg-zinc-900 text-zinc-300 border border-zinc-800"
+                            >
+                              {qId}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
+                    <span className="px-2.5 py-1 text-xs font-semibold rounded-full bg-zinc-900 text-zinc-300 border border-zinc-800">
+                      ⏱️ {day.durationMinutes} mins
+                    </span>
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>

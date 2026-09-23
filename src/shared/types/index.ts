@@ -162,6 +162,8 @@ export interface KitResponse {
   requirements?: IRequirement[];
   companyBrief?: ICompanyBrief;
   questionBank?: IQuestion[];
+  flashcards?: IFlashcard[];
+  studySchedule?: IStudyDay[];
   coverage?: ICoverageReport;
   message?: string;
   error?: {

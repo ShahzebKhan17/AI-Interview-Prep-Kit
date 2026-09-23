@@ -12,6 +12,8 @@ import { extractRequirementsFromJD } from "../services/requirement-extraction.se
 import { conductCompanyResearch } from "../services/crawler/company-research.service";
 import { generateQuestionBank } from "../services/question-generation.service";
 import { calculateKitCoverage } from "../services/coverage.service";
+import { generateFlashcardsWithFallback } from "../services/flashcard-generation.service";
+import { allocateStudySchedule } from "../services/scheduling.service";
 
 function formatKit(doc: KitDocument) {
   return {
@@ -636,13 +638,66 @@ export async function generateQuestions(req: Request, res: Response): Promise<vo
       ...generatedQuestions.filter((q) => !preservedIds.has(q.id)),
     ];
     kit.questionBank = combinedQuestions;
-    // Preserve kit.status as "draft" per approved architecture
+
+    // Generate flashcards (preserving edited/pinned cards)
+    try {
+      const preservedFlashcards = (kit.flashcards || []).filter(
+        (f) => f.state === "edited" || f.state === "pinned"
+      );
+      const generatedCards = await generateFlashcardsWithFallback({
+        requirements: kit.requirements.map((r) => ({
+          id: r.id,
+          text: r.text,
+          kind: r.kind,
+          priority: r.priority,
+        })),
+        questions: combinedQuestions.map((q) => ({
+          id: q.id,
+          question: q.question,
+          answerOutline: q.answerOutline,
+          requirementIds: q.requirementIds,
+        })),
+      });
+
+      const preservedCardIds = new Set(preservedFlashcards.map((f) => f.id));
+      const formattedNewCards = generatedCards
+        .filter((c) => !preservedCardIds.has(c.id))
+        .map((c) => ({
+          id: c.id,
+          front: c.front,
+          back: c.back,
+          state: "generated" as const,
+        }));
+
+      kit.flashcards = [...preservedFlashcards, ...formattedNewCards];
+    } catch (fcErr) {
+      console.warn("[Kit] Flashcard generation warning in generateQuestions:", fcErr);
+    }
+
+    // Allocate study schedule
+    try {
+      const scheduleAllocated = allocateStudySchedule({
+        questions: combinedQuestions,
+        requirements: kit.requirements,
+        daysAvailable: kit.daysAvailable || 5,
+      });
+      kit.studySchedule = scheduleAllocated.days.map((d) => ({
+        day: d.day,
+        topic: d.focus,
+        questionIds: d.question_ids,
+        durationMinutes: d.minutes,
+      }));
+    } catch (schedErr) {
+      console.warn("[Kit] Schedule allocation warning in generateQuestions:", schedErr);
+    }
 
     await kit.save();
 
     res.status(200).json({
       success: true,
       questionBank: kit.questionBank,
+      flashcards: kit.flashcards,
+      studySchedule: kit.studySchedule,
     });
   } catch (error) {
     console.error("[Kit] Generate questions error:", error);
@@ -731,6 +786,146 @@ export async function getKitCoverage(req: Request, res: Response): Promise<void>
       error: {
         code: "INTERNAL_SERVER_ERROR",
         message: "An unexpected error occurred while calculating coverage.",
+      },
+    });
+  }
+}
+
+export async function generateFlashcardsForKit(req: Request, res: Response): Promise<void> {
+  const id = getParamId(req.params.id);
+  if (!id) {
+    res.status(404).json({
+      success: false,
+      error: { code: "KIT_NOT_FOUND", message: "Interview kit not found." },
+    });
+    return;
+  }
+
+  try {
+    const kit = await Kit.findOne({ _id: id, userId: req.userId });
+    if (!kit) {
+      res.status(404).json({
+        success: false,
+        error: { code: "KIT_NOT_FOUND", message: "Interview kit not found." },
+      });
+      return;
+    }
+
+    if (!kit.requirements || kit.requirements.length === 0) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: "PREREQUISITE_FAILED",
+          message: "Job requirements must be extracted before flashcards can be generated.",
+        },
+      });
+      return;
+    }
+
+    const preservedFlashcards = (kit.flashcards || []).filter(
+      (f) => f.state === "edited" || f.state === "pinned"
+    );
+    const generatedCards = await generateFlashcardsWithFallback({
+      requirements: kit.requirements.map((r) => ({
+        id: r.id,
+        text: r.text,
+        kind: r.kind,
+        priority: r.priority,
+      })),
+      questions: (kit.questionBank || []).map((q) => ({
+        id: q.id,
+        question: q.question,
+        answerOutline: q.answerOutline,
+        requirementIds: q.requirementIds,
+      })),
+    });
+
+    const preservedCardIds = new Set(preservedFlashcards.map((f) => f.id));
+    const formattedNewCards = generatedCards
+      .filter((c) => !preservedCardIds.has(c.id))
+      .map((c) => ({
+        id: c.id,
+        front: c.front,
+        back: c.back,
+        state: "generated" as const,
+      }));
+
+    kit.flashcards = [...preservedFlashcards, ...formattedNewCards];
+    await kit.save();
+
+    res.status(200).json({
+      success: true,
+      flashcards: kit.flashcards,
+    });
+  } catch (error) {
+    console.error("[Kit] Generate flashcards error:", error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: "INTERNAL_SERVER_ERROR",
+        message: "An unexpected error occurred during flashcard generation.",
+      },
+    });
+  }
+}
+
+export async function generateScheduleForKit(req: Request, res: Response): Promise<void> {
+  const id = getParamId(req.params.id);
+  if (!id) {
+    res.status(404).json({
+      success: false,
+      error: { code: "KIT_NOT_FOUND", message: "Interview kit not found." },
+    });
+    return;
+  }
+
+  try {
+    const kit = await Kit.findOne({ _id: id, userId: req.userId });
+    if (!kit) {
+      res.status(404).json({
+        success: false,
+        error: { code: "KIT_NOT_FOUND", message: "Interview kit not found." },
+      });
+      return;
+    }
+
+    if (!kit.questionBank || kit.questionBank.length === 0) {
+      res.status(400).json({
+        success: false,
+        error: {
+          code: "PREREQUISITE_FAILED",
+          message: "Interview questions must be generated before study schedule can be allocated.",
+        },
+      });
+      return;
+    }
+
+    const scheduleAllocated = allocateStudySchedule({
+      questions: kit.questionBank,
+      requirements: kit.requirements || [],
+      daysAvailable: kit.daysAvailable || 5,
+    });
+
+    kit.studySchedule = scheduleAllocated.days.map((d) => ({
+      day: d.day,
+      topic: d.focus,
+      questionIds: d.question_ids,
+      durationMinutes: d.minutes,
+    }));
+
+    await kit.save();
+
+    res.status(200).json({
+      success: true,
+      studySchedule: kit.studySchedule,
+    });
+  } catch (error) {
+    console.error("[Kit] Generate schedule error:", error);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: "INTERNAL_SERVER_ERROR",
+        message: "An unexpected error occurred during schedule allocation.",
       },
     });
   }
