@@ -626,8 +626,16 @@ export async function generateQuestions(req: Request, res: Response): Promise<vo
       return;
     }
 
-    // 5. Replace the complete questionBank in memory only after successful validation
-    kit.questionBank = generatedQuestions;
+    // 5. Replace questionBank in memory, preserving manual edits and pinned questions
+    const preservedQuestions = (kit.questionBank || []).filter(
+      (q) => q.state === "edited" || q.state === "pinned"
+    );
+    const preservedIds = new Set(preservedQuestions.map((q) => q.id));
+    const combinedQuestions = [
+      ...preservedQuestions,
+      ...generatedQuestions.filter((q) => !preservedIds.has(q.id)),
+    ];
+    kit.questionBank = combinedQuestions;
     // Preserve kit.status as "draft" per approved architecture
 
     await kit.save();

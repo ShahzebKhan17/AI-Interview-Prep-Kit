@@ -155,3 +155,29 @@ export async function getKitCoverage(
 
   return result.coverage;
 }
+
+export async function updateKit(
+  kitId: string,
+  payload: Partial<{
+    title: string;
+    jobDescription: string;
+    companyUrl: string;
+    daysAvailable: number;
+    status: string;
+    questionBank: IQuestion[];
+    requirements: IRequirement[];
+    companyBrief: ICompanyBrief;
+  }>
+): Promise<IKit> {
+  const result = await request<KitResponse>(`/api/kits/${kitId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+
+  if (!result.kit) {
+    throw new KitApiError("Failed to update kit.");
+  }
+
+  return result.kit;
+}
+

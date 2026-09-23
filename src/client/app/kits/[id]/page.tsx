@@ -4,8 +4,8 @@ import React, { useEffect, useState, useCallback } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useAuth } from "../../../context/AuthContext";
-import { IKit, IRequirement, ISource, IQuestion, ICoverageReport, IRequirementCoverage } from "@shared/types";
-import { getKit, extractKitRequirements, researchCompanyBrief, generateKitQuestions, getKitCoverage, KitApiError } from "../../../lib/kits";
+import { IKit, IRequirement, ISource, IQuestion, ICoverageReport, IRequirementCoverage, QuestionCategory, ContentState } from "@shared/types";
+import { getKit, extractKitRequirements, researchCompanyBrief, generateKitQuestions, getKitCoverage, updateKit, KitApiError } from "../../../lib/kits";
 
 export default function KitDetailsPage() {
   const router = useRouter();
@@ -26,6 +26,38 @@ export default function KitDetailsPage() {
   const [coverage, setCoverage] = useState<ICoverageReport | null>(null);
   const [loadingCoverage, setLoadingCoverage] = useState(false);
   const [coverageError, setCoverageError] = useState<string | null>(null);
+
+  // Builder State for Question Bank & Company Brief
+  const [editingQuestionId, setEditingQuestionId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<{
+    question: string;
+    answerOutline: string;
+    durationMinutes: number;
+    category: QuestionCategory;
+  }>({
+    question: "",
+    answerOutline: "",
+    durationMinutes: 30,
+    category: "technical",
+  });
+  const [isAddingQuestion, setIsAddingQuestion] = useState(false);
+  const [newQuestionForm, setNewQuestionForm] = useState<{
+    question: string;
+    answerOutline: string;
+    durationMinutes: number;
+    category: QuestionCategory;
+  }>({
+    question: "",
+    answerOutline: "",
+    durationMinutes: 30,
+    category: "technical",
+  });
+  const [isEditingBrief, setIsEditingBrief] = useState(false);
+  const [briefSummary, setBriefSummary] = useState("");
+  const [briefIndustry, setBriefIndustry] = useState("");
+  const [briefHiringProcess, setBriefHiringProcess] = useState("");
+  const [savingKit, setSavingKit] = useState(false);
+  const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
 
   const fetchCoverage = useCallback(async (id: string) => {
     setLoadingCoverage(true);
@@ -103,6 +135,173 @@ export default function KitDetailsPage() {
       setGeneratingQuestions(false);
     }
   };
+
+  const handleStartEditBrief = () => {
+    setIsEditingBrief(true);
+    setBriefSummary(kit?.companyBrief?.summary || "");
+    setBriefIndustry(kit?.companyBrief?.industry || "");
+    setBriefHiringProcess(kit?.companyBrief?.hiringProcess || "");
+  };
+
+  const handleSaveBrief = async () => {
+    if (!kit) return;
+    setSavingKit(true);
+    const updatedBrief = {
+      summary: briefSummary.trim(),
+      industry: briefIndustry.trim(),
+      productsOrServices: kit.companyBrief?.productsOrServices || [],
+      hiringProcess: briefHiringProcess.trim() || null,
+      sources: kit.companyBrief?.sources || [],
+    };
+    try {
+      const savedKit = await updateKit(kit.id, { companyBrief: updatedBrief });
+      setKit(savedKit);
+      setIsEditingBrief(false);
+      setSaveSuccessMessage("Company brief updated successfully.");
+      setTimeout(() => setSaveSuccessMessage(null), 3000);
+    } catch (err) {
+      setResearchError((err as Error)?.message || "Failed to update company brief.");
+    } finally {
+      setSavingKit(false);
+    }
+  };
+
+  const handleStartEditQuestion = (q: IQuestion) => {
+    setEditingQuestionId(q.id);
+    setEditForm({
+      question: q.question,
+      answerOutline: q.answerOutline || "",
+      durationMinutes: q.durationMinutes || 30,
+      category: q.category || "technical",
+    });
+  };
+
+  const handleCancelEditQuestion = () => {
+    setEditingQuestionId(null);
+  };
+
+  const handleSaveQuestion = async (qId: string) => {
+    if (!kit || !kit.questionBank) return;
+    if (!editForm.question.trim()) return;
+    setSavingKit(true);
+
+    const updated = kit.questionBank.map((q) => {
+      if (q.id === qId) {
+        return {
+          ...q,
+          question: editForm.question.trim(),
+          answerOutline: editForm.answerOutline.trim(),
+          durationMinutes: Number(editForm.durationMinutes) || 30,
+          category: editForm.category,
+          state: (q.state === "pinned" ? "pinned" : "edited") as ContentState,
+        };
+      }
+      return q;
+    });
+
+    try {
+      const savedKit = await updateKit(kit.id, { questionBank: updated });
+      setKit(savedKit);
+      setEditingQuestionId(null);
+      fetchCoverage(kit.id);
+      setSaveSuccessMessage("Question updated successfully.");
+      setTimeout(() => setSaveSuccessMessage(null), 3000);
+    } catch (err) {
+      setGenerationError((err as Error)?.message || "Failed to update question.");
+    } finally {
+      setSavingKit(false);
+    }
+  };
+
+  const handleMoveQuestion = async (index: number, direction: "up" | "down") => {
+    if (!kit || !kit.questionBank) return;
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= kit.questionBank.length) return;
+
+    const list = [...kit.questionBank];
+    const temp = list[index];
+    list[index] = list[targetIndex];
+    list[targetIndex] = temp;
+
+    setKit((prev) => (prev ? { ...prev, questionBank: list } : prev));
+    try {
+      await updateKit(kit.id, { questionBank: list });
+    } catch (err) {
+      console.error("Failed to reorder questions:", err);
+    }
+  };
+
+  const handleTogglePin = async (qId: string) => {
+    if (!kit || !kit.questionBank) return;
+    const updated = kit.questionBank.map((q) => {
+      if (q.id === qId) {
+        const nextState: ContentState = q.state === "pinned" ? "edited" : "pinned";
+        return { ...q, state: nextState };
+      }
+      return q;
+    });
+    setKit((prev) => (prev ? { ...prev, questionBank: updated } : prev));
+    try {
+      await updateKit(kit.id, { questionBank: updated });
+    } catch (err) {
+      console.error("Failed to toggle pin:", err);
+    }
+  };
+
+  const handleDeleteQuestion = async (qId: string) => {
+    if (!kit || !kit.questionBank) return;
+    if (!confirm("Are you sure you want to delete this question?")) return;
+
+    const updated = kit.questionBank.filter((q) => q.id !== qId);
+    setKit((prev) => (prev ? { ...prev, questionBank: updated } : prev));
+    try {
+      await updateKit(kit.id, { questionBank: updated });
+      fetchCoverage(kit.id);
+      setSaveSuccessMessage("Question deleted from bank.");
+      setTimeout(() => setSaveSuccessMessage(null), 3000);
+    } catch (err) {
+      console.error("Failed to delete question:", err);
+    }
+  };
+
+  const handleAddQuestionSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!kit) return;
+    if (!newQuestionForm.question.trim()) return;
+
+    const newId = `Q-${(kit.questionBank?.length || 0) + 1}-${Math.floor(100 + Math.random() * 900)}`;
+    const newQ: IQuestion = {
+      id: newId,
+      question: newQuestionForm.question.trim(),
+      answerOutline: newQuestionForm.answerOutline.trim(),
+      durationMinutes: Number(newQuestionForm.durationMinutes) || 30,
+      category: newQuestionForm.category,
+      requirementIds: [],
+      state: "edited",
+    };
+
+    const updated = [...(kit.questionBank || []), newQ];
+    setSavingKit(true);
+    try {
+      const savedKit = await updateKit(kit.id, { questionBank: updated });
+      setKit(savedKit);
+      setIsAddingQuestion(false);
+      setNewQuestionForm({
+        question: "",
+        answerOutline: "",
+        durationMinutes: 30,
+        category: "technical",
+      });
+      fetchCoverage(kit.id);
+      setSaveSuccessMessage("Custom question added to bank.");
+      setTimeout(() => setSaveSuccessMessage(null), 3000);
+    } catch (err) {
+      setGenerationError((err as Error)?.message || "Failed to add question.");
+    } finally {
+      setSavingKit(false);
+    }
+  };
+
 
   useEffect(() => {
     if (!authLoading && !user) {
@@ -393,23 +592,96 @@ export default function KitDetailsPage() {
               </p>
             </div>
 
-            <button
-              onClick={handleResearchCompany}
-              disabled={researching}
-              className="inline-flex items-center justify-center gap-2 py-2 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white font-medium rounded-lg text-sm transition focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed shrink-0"
-            >
-              {researching ? (
-                <>
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                  <span>Researching...</span>
-                </>
-              ) : kit.companyBrief?.summary ? (
-                <span>Re-research Company</span>
-              ) : (
-                <span>Research Company</span>
+            <div className="flex flex-wrap items-center gap-2">
+              {kit.companyBrief?.summary && !isEditingBrief && (
+                <button
+                  type="button"
+                  onClick={handleStartEditBrief}
+                  className="py-2 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-sm font-medium rounded-lg border border-zinc-700 transition"
+                >
+                  ✏️ Edit Brief
+                </button>
               )}
-            </button>
+
+              <button
+                onClick={handleResearchCompany}
+                disabled={researching}
+                className="inline-flex items-center justify-center gap-2 py-2 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white font-medium rounded-lg text-sm transition focus:outline-none focus:ring-2 focus:ring-emerald-500 cursor-pointer disabled:cursor-not-allowed shrink-0"
+              >
+                {researching ? (
+                  <>
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    <span>Researching...</span>
+                  </>
+                ) : kit.companyBrief?.summary ? (
+                  <span>Re-research Company</span>
+                ) : (
+                  <span>Research Company</span>
+                )}
+              </button>
+            </div>
           </div>
+
+          {/* Company Brief Inline Edit Form */}
+          {isEditingBrief && (
+            <div className="p-5 bg-zinc-950 border border-emerald-800/80 rounded-lg space-y-4 shadow-lg animate-fadeIn">
+              <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+                <span className="text-sm font-semibold text-emerald-400">Edit Company Brief Inline</span>
+                <span className="text-xs text-zinc-500">Changes will be saved to your kit</span>
+              </div>
+
+              <div className="space-y-3 text-sm">
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-1">Company Summary / Overview</label>
+                  <textarea
+                    rows={4}
+                    value={briefSummary}
+                    onChange={(e) => setBriefSummary(e.target.value)}
+                    className="w-full p-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500 font-sans"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-1">Industry</label>
+                  <input
+                    type="text"
+                    value={briefIndustry}
+                    onChange={(e) => setBriefIndustry(e.target.value)}
+                    className="w-full p-2 bg-zinc-900 border border-zinc-700 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-1">Hiring &amp; Interview Process</label>
+                  <textarea
+                    rows={3}
+                    value={briefHiringProcess}
+                    onChange={(e) => setBriefHiringProcess(e.target.value)}
+                    placeholder="Describe known interview stages (e.g. Recruiter Screen, Technical Assessment, System Design)..."
+                    className="w-full p-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-white text-sm focus:outline-none focus:border-emerald-500 font-sans"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setIsEditingBrief(false)}
+                  className="py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded-lg transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={savingKit}
+                  onClick={handleSaveBrief}
+                  className="py-1.5 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-800 text-white font-medium text-xs rounded-lg transition"
+                >
+                  {savingKit ? "Saving..." : "Save Brief"}
+                </button>
+              </div>
+            </div>
+          )}
 
           {researchError && (
             <div
@@ -546,12 +818,12 @@ export default function KitDetailsPage() {
           )}
         </div>
 
-        {/* Interview Question Bank Section (Stage 7) */}
+        {/* Interview Question Bank Section (The Builder) */}
         <div className="p-8 bg-zinc-900 border border-zinc-800 rounded-xl shadow-lg space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <div className="flex items-center gap-2.5">
-                <h2 className="text-lg font-semibold text-white">Interview Question Bank</h2>
+                <h2 className="text-lg font-semibold text-white">Interview Question Bank &amp; Builder</h2>
                 {kit.questionBank && kit.questionBank.length > 0 && (
                   <span className="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-indigo-950/60 text-indigo-400 border border-indigo-800">
                     {kit.questionBank.length} {kit.questionBank.length === 1 ? "Question" : "Questions"}
@@ -559,32 +831,48 @@ export default function KitDetailsPage() {
                 )}
               </div>
               <p className="text-xs text-zinc-400 mt-1">
-                AI-generated interview questions mapped to requirements and grounded in company research.
+                Edit any question inline, reorder with arrows, change categories, or add custom questions by hand.
               </p>
             </div>
 
-            <button
-              onClick={handleGenerateQuestions}
-              disabled={generatingQuestions || !kit.requirements || kit.requirements.length === 0}
-              className="inline-flex items-center justify-center gap-2 py-2 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white font-medium rounded-lg text-sm transition focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer disabled:cursor-not-allowed shrink-0"
-              title={
-                !kit.requirements || kit.requirements.length === 0
-                  ? "Requirements must be extracted before generating questions."
-                  : undefined
-              }
-            >
-              {generatingQuestions ? (
-                <>
-                  <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
-                  <span>Generating...</span>
-                </>
-              ) : kit.questionBank && kit.questionBank.length > 0 ? (
-                <span>Regenerate Question Bank</span>
-              ) : (
-                <span>Generate Questions</span>
-              )}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setIsAddingQuestion((prev) => !prev)}
+                className="inline-flex items-center justify-center gap-1.5 py-2 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium rounded-lg text-sm transition border border-zinc-700 cursor-pointer"
+              >
+                <span>{isAddingQuestion ? "✕ Cancel" : "+ Add Question"}</span>
+              </button>
+
+              <button
+                onClick={handleGenerateQuestions}
+                disabled={generatingQuestions || !kit.requirements || kit.requirements.length === 0}
+                className="inline-flex items-center justify-center gap-2 py-2 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 disabled:text-zinc-500 text-white font-medium rounded-lg text-sm transition focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer disabled:cursor-not-allowed shrink-0"
+                title={
+                  !kit.requirements || kit.requirements.length === 0
+                    ? "Requirements must be extracted before generating questions."
+                    : undefined
+                }
+              >
+                {generatingQuestions ? (
+                  <>
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    <span>Generating...</span>
+                  </>
+                ) : kit.questionBank && kit.questionBank.length > 0 ? (
+                  <span>Regenerate (Preserves Edits)</span>
+                ) : (
+                  <span>Generate Questions</span>
+                )}
+              </button>
+            </div>
           </div>
+
+          {saveSuccessMessage && (
+            <div className="p-3 text-sm rounded-lg bg-emerald-950/60 border border-emerald-800 text-emerald-300 flex items-center justify-between">
+              <span>✓ {saveSuccessMessage}</span>
+              <button onClick={() => setSaveSuccessMessage(null)} className="text-emerald-400 hover:text-emerald-200 text-xs">✕</button>
+            </div>
+          )}
 
           {(!kit.requirements || kit.requirements.length === 0) && (
             <div className="p-3 text-xs rounded-lg bg-amber-950/40 border border-amber-800/80 text-amber-300">
@@ -599,6 +887,89 @@ export default function KitDetailsPage() {
             >
               {generationError}
             </div>
+          )}
+
+          {/* Add Question Form Card */}
+          {isAddingQuestion && (
+            <form
+              onSubmit={handleAddQuestionSubmit}
+              className="p-5 bg-zinc-950 border border-indigo-800/80 rounded-lg space-y-4 shadow-lg animate-fadeIn"
+            >
+              <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
+                <span className="text-sm font-semibold text-indigo-400">Add New Question to Bank</span>
+                <span className="text-xs text-zinc-500">Will be saved as custom/edited</span>
+              </div>
+
+              <div className="space-y-3 text-sm">
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-1">Question Prompt</label>
+                  <textarea
+                    rows={2}
+                    required
+                    value={newQuestionForm.question}
+                    onChange={(e) => setNewQuestionForm({ ...newQuestionForm, question: e.target.value })}
+                    placeholder="e.g. How do you manage component state and side effects in Next.js?"
+                    className="w-full p-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-400 mb-1">Category</label>
+                    <select
+                      value={newQuestionForm.category}
+                      onChange={(e) => setNewQuestionForm({ ...newQuestionForm, category: e.target.value as QuestionCategory })}
+                      className="w-full p-2 bg-zinc-900 border border-zinc-700 rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="technical">Technical</option>
+                      <option value="behavioral">Behavioral</option>
+                      <option value="roleSpecific">Role Specific / Domain</option>
+                      <option value="company">Company Fit</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-medium text-zinc-400 mb-1">Expected Duration (Minutes)</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={120}
+                      value={newQuestionForm.durationMinutes}
+                      onChange={(e) => setNewQuestionForm({ ...newQuestionForm, durationMinutes: parseInt(e.target.value, 10) || 15 })}
+                      className="w-full p-2 bg-zinc-900 border border-zinc-700 rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-1">Answer Guidance &amp; Outline</label>
+                  <textarea
+                    rows={3}
+                    value={newQuestionForm.answerOutline}
+                    onChange={(e) => setNewQuestionForm({ ...newQuestionForm, answerOutline: e.target.value })}
+                    placeholder="Outline key discussion points, trade-offs, and examples candidate should demonstrate..."
+                    className="w-full p-2.5 bg-zinc-900 border border-zinc-700 rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setIsAddingQuestion(false)}
+                  className="py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded-lg transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingKit}
+                  className="py-1.5 px-4 bg-indigo-600 hover:bg-indigo-500 disabled:bg-zinc-800 text-white font-medium text-xs rounded-lg transition"
+                >
+                  {savingKit ? "Saving..." : "Add to Bank"}
+                </button>
+              </div>
+            </form>
           )}
 
           {generatingQuestions && (
@@ -626,66 +997,231 @@ export default function KitDetailsPage() {
 
           {!generatingQuestions && kit.questionBank && kit.questionBank.length > 0 && (
             <div className="space-y-4">
-              {kit.questionBank.map((q: IQuestion) => (
-                <div
-                  key={q.id}
-                  className="p-5 bg-zinc-950 border border-zinc-800 rounded-lg space-y-3 hover:border-zinc-700/80 transition"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="px-2 py-0.5 font-mono text-xs font-semibold rounded bg-zinc-800 text-zinc-200 border border-zinc-700">
-                        {q.id}
-                      </span>
-                      <span
-                        className={`px-2 py-0.5 text-xs font-medium rounded-full border capitalize ${
-                          q.category === "technical"
-                            ? "bg-blue-950/60 text-blue-400 border-blue-800"
-                            : q.category === "behavioral"
-                            ? "bg-purple-950/60 text-purple-400 border-purple-800"
-                            : q.category === "roleSpecific"
-                            ? "bg-emerald-950/60 text-emerald-400 border-emerald-800"
-                            : "bg-amber-950/60 text-amber-400 border-amber-800"
-                        }`}
-                      >
-                        {q.category === "roleSpecific" ? "Role Specific" : q.category}
-                      </span>
+              {kit.questionBank.map((q: IQuestion, index: number) => {
+                const isEditing = editingQuestionId === q.id;
+
+                return (
+                  <div
+                    key={q.id}
+                    className={`p-5 bg-zinc-950 border rounded-lg space-y-3 transition ${
+                      q.state === "pinned"
+                        ? "border-amber-700/80 bg-amber-950/10 shadow-amber-950/30"
+                        : q.state === "edited"
+                        ? "border-indigo-700/80 bg-indigo-950/10"
+                        : "border-zinc-800 hover:border-zinc-700/80"
+                    }`}
+                  >
+                    {/* Header Row */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800/80 pb-3">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="px-2 py-0.5 font-mono text-xs font-semibold rounded bg-zinc-800 text-zinc-200 border border-zinc-700">
+                          {q.id}
+                        </span>
+
+                        {/* Category Badge */}
+                        <span
+                          className={`px-2 py-0.5 text-xs font-medium rounded-full border capitalize ${
+                            q.category === "technical"
+                              ? "bg-blue-950/60 text-blue-400 border-blue-800"
+                              : q.category === "behavioral"
+                              ? "bg-purple-950/60 text-purple-400 border-purple-800"
+                              : q.category === "roleSpecific"
+                              ? "bg-emerald-950/60 text-emerald-400 border-emerald-800"
+                              : "bg-amber-950/60 text-amber-400 border-amber-800"
+                          }`}
+                        >
+                          {q.category === "roleSpecific" ? "Role Specific" : q.category}
+                        </span>
+
+                        {/* State Badge (Section 6 Requirement) */}
+                        {q.state === "pinned" && (
+                          <span className="px-2 py-0.5 text-[11px] font-medium rounded-full bg-amber-950/80 text-amber-300 border border-amber-700">
+                            📌 Pinned
+                          </span>
+                        )}
+                        {q.state === "edited" && (
+                          <span className="px-2 py-0.5 text-[11px] font-medium rounded-full bg-cyan-950/80 text-cyan-300 border border-cyan-700">
+                            ✏️ Edited
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Controls Toolbar: Reorder, Pin, Edit, Delete */}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="text-xs text-zinc-400 mr-2">
+                          ⏱️ {q.durationMinutes} min
+                        </span>
+
+                        {/* Reorder Up */}
+                        <button
+                          type="button"
+                          disabled={index === 0}
+                          onClick={() => handleMoveQuestion(index, "up")}
+                          title="Move question up"
+                          className="p-1 px-1.5 text-xs bg-zinc-900 hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-300 rounded border border-zinc-800"
+                        >
+                          ▲
+                        </button>
+
+                        {/* Reorder Down */}
+                        <button
+                          type="button"
+                          disabled={index === (kit.questionBank?.length || 0) - 1}
+                          onClick={() => handleMoveQuestion(index, "down")}
+                          title="Move question down"
+                          className="p-1 px-1.5 text-xs bg-zinc-900 hover:bg-zinc-800 disabled:opacity-30 disabled:cursor-not-allowed text-zinc-300 rounded border border-zinc-800"
+                        >
+                          ▼
+                        </button>
+
+                        {/* Pin Toggle */}
+                        <button
+                          type="button"
+                          onClick={() => handleTogglePin(q.id)}
+                          title={q.state === "pinned" ? "Unpin question" : "Pin question (protected from regeneration)"}
+                          className={`p-1 px-2 text-xs rounded border transition ${
+                            q.state === "pinned"
+                              ? "bg-amber-950/80 text-amber-300 border-amber-700 hover:bg-amber-900"
+                              : "bg-zinc-900 text-zinc-400 border-zinc-800 hover:text-zinc-200"
+                          }`}
+                        >
+                          📌 {q.state === "pinned" ? "Pinned" : "Pin"}
+                        </button>
+
+                        {/* Edit Toggle */}
+                        <button
+                          type="button"
+                          onClick={() => (isEditing ? handleCancelEditQuestion() : handleStartEditQuestion(q))}
+                          className="p-1 px-2.5 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded border border-zinc-700 transition"
+                        >
+                          {isEditing ? "Cancel" : "✏️ Edit"}
+                        </button>
+
+                        {/* Delete Button */}
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteQuestion(q.id)}
+                          title="Delete this question"
+                          className="p-1 px-2 text-xs bg-red-950/40 hover:bg-red-900/60 text-red-400 rounded border border-red-800/80 transition"
+                        >
+                          🗑️
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-zinc-400">
-                        ⏱️ {q.durationMinutes} min
-                      </span>
-                      {q.requirementIds && q.requirementIds.length > 0 && (
-                        <div className="flex items-center gap-1">
-                          {q.requirementIds.map((reqId: string) => (
-                            <span
-                              key={reqId}
-                              className="px-2 py-0.5 font-mono text-[11px] rounded bg-zinc-900 text-zinc-400 border border-zinc-800"
-                            >
-                              {reqId}
-                            </span>
-                          ))}
+                    {/* Requirement Tags */}
+                    {q.requirementIds && q.requirementIds.length > 0 && (
+                      <div className="flex items-center gap-1.5 pt-0.5">
+                        <span className="text-[11px] text-zinc-500">Linked Requirements:</span>
+                        {q.requirementIds.map((reqId: string) => (
+                          <span
+                            key={reqId}
+                            className="px-2 py-0.5 font-mono text-[11px] rounded bg-zinc-900 text-zinc-300 border border-zinc-800"
+                          >
+                            {reqId}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Question Content: Read Mode vs. Inline Edit Mode */}
+                    {isEditing ? (
+                      <div className="space-y-3 pt-2 text-sm bg-zinc-900/90 p-4 rounded-lg border border-indigo-800/80">
+                        <div>
+                          <label className="block text-xs font-semibold text-zinc-400 mb-1">
+                            Edit Question Prompt:
+                          </label>
+                          <textarea
+                            rows={3}
+                            value={editForm.question}
+                            onChange={(e) => setEditForm({ ...editForm, question: e.target.value })}
+                            className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500 font-sans"
+                          />
                         </div>
-                      )}
-                    </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs font-semibold text-zinc-400 mb-1">
+                              Category:
+                            </label>
+                            <select
+                              value={editForm.category}
+                              onChange={(e) => setEditForm({ ...editForm, category: e.target.value as QuestionCategory })}
+                              className="w-full p-2 bg-zinc-950 border border-zinc-700 rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500"
+                            >
+                              <option value="technical">Technical</option>
+                              <option value="behavioral">Behavioral</option>
+                              <option value="roleSpecific">Role Specific / Domain</option>
+                              <option value="company">Company Fit</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-xs font-semibold text-zinc-400 mb-1">
+                              Duration (Minutes):
+                            </label>
+                            <input
+                              type="number"
+                              min={1}
+                              max={180}
+                              value={editForm.durationMinutes}
+                              onChange={(e) => setEditForm({ ...editForm, durationMinutes: parseInt(e.target.value, 10) || 15 })}
+                              className="w-full p-2 bg-zinc-950 border border-zinc-700 rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500"
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-zinc-400 mb-1">
+                            Answer Guidance &amp; Outline:
+                          </label>
+                          <textarea
+                            rows={3}
+                            value={editForm.answerOutline}
+                            onChange={(e) => setEditForm({ ...editForm, answerOutline: e.target.value })}
+                            className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded-lg text-white text-sm focus:outline-none focus:border-indigo-500 font-sans"
+                          />
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2 pt-2">
+                          <button
+                            type="button"
+                            onClick={handleCancelEditQuestion}
+                            className="py-1.5 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded-lg transition"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            disabled={savingKit}
+                            onClick={() => handleSaveQuestion(q.id)}
+                            className="py-1.5 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-800 text-white font-medium text-xs rounded-lg transition"
+                          >
+                            {savingKit ? "Saving..." : "Save Changes"}
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <p className="text-base font-semibold text-white leading-snug">
+                          {q.question}
+                        </p>
+
+                        {q.answerOutline && (
+                          <div className="p-3 bg-zinc-900/70 border border-zinc-800/80 rounded-lg space-y-1">
+                            <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider block">
+                              Answer Guidance &amp; Outline:
+                            </span>
+                            <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap">
+                              {q.answerOutline}
+                            </p>
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
-
-                  <p className="text-base font-semibold text-white leading-snug">
-                    {q.question}
-                  </p>
-
-                  {q.answerOutline && (
-                    <div className="p-3 bg-zinc-900/70 border border-zinc-800/80 rounded-lg space-y-1">
-                      <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider block">
-                        Answer Guidance &amp; Outline:
-                      </span>
-                      <p className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap">
-                        {q.answerOutline}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
