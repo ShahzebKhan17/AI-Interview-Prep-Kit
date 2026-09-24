@@ -16,11 +16,24 @@ const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:3000";
 // Trust first proxy for PaaS deployments (Render, Railway, Heroku)
 app.set("trust proxy", 1);
 
+const allowedOrigins = [
+  CLIENT_URL,
+  "http://localhost:3000",
+  "https://ai-interview-prep-kit-cz2d.vercel.app",
+].filter(Boolean);
+
 // Standard Middlewares
 app.use(
   cors({
-    origin: CLIENT_URL,
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin) || origin.endsWith(".vercel.app")) {
+        callback(null, true);
+      } else {
+        callback(null, origin === CLIENT_URL);
+      }
+    },
     credentials: true,
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 app.use(express.json());

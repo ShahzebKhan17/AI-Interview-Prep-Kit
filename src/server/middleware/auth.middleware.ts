@@ -6,7 +6,14 @@ interface JwtUserPayload {
 }
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
-  const token = req.cookies?.auth_token;
+  let token = req.cookies?.auth_token;
+
+  if (!token && req.headers.authorization) {
+    const [scheme, credentials] = req.headers.authorization.split(" ");
+    if (scheme?.toLowerCase() === "bearer" && credentials) {
+      token = credentials;
+    }
+  }
 
   if (!token) {
     res.status(401).json({

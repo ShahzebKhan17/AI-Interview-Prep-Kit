@@ -1,4 +1,5 @@
 import { IKit, IRequirement, ICompanyBrief, IQuestion, IFlashcard, IStudyDay, ICoverageReport, KitResponse } from "@shared/types";
+import { getStoredToken } from "./auth";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:5000";
 
@@ -15,8 +16,10 @@ export class KitApiError extends Error {
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE_URL}${endpoint}`;
+  const token = getStoredToken();
   const headers = {
     "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...options.headers,
   };
 

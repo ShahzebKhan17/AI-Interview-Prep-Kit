@@ -148,6 +148,7 @@ export async function login(req: Request, res: Response): Promise<void> {
 
     res.status(200).json({
       success: true,
+      token,
       user: {
         id: user._id.toString(),
         name: user.name,

@@ -11,10 +11,45 @@ export class AuthError extends Error {
   }
 }
 
+const TOKEN_KEY = "auth_token";
+
+export function getStoredToken(): string | null {
+  if (typeof window !== "undefined") {
+    try {
+      return localStorage.getItem(TOKEN_KEY);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export function setStoredToken(token: string): void {
+  if (typeof window !== "undefined") {
+    try {
+      localStorage.setItem(TOKEN_KEY, token);
+    } catch {
+      // Ignore storage errors in restricted contexts
+    }
+  }
+}
+
+export function removeStoredToken(): void {
+  if (typeof window !== "undefined") {
+    try {
+      localStorage.removeItem(TOKEN_KEY);
+    } catch {
+      // Ignore storage errors
+    }
+  }
+}
+
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const url = `${API_BASE_URL}${endpoint}`;
+  const token = getStoredToken();
   const headers = {
     "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...options.headers,
   };
 
@@ -74,13 +109,21 @@ export async function login(email: string, password: string): Promise<AuthUser> 
     throw new AuthError("Login failed to return user profile.");
   }
 
+  if (result.token) {
+    setStoredToken(result.token);
+  }
+
   return result.user;
 }
 
 export async function logout(): Promise<void> {
-  await request<{ success: boolean }>("/api/auth/logout", {
-    method: "POST",
-  });
+  try {
+    await request<{ success: boolean }>("/api/auth/logout", {
+      method: "POST",
+    });
+  } finally {
+    removeStoredToken();
+  }
 }
 
 export async function getCurrentUser(): Promise<AuthUser | null> {
@@ -91,6 +134,7 @@ export async function getCurrentUser(): Promise<AuthUser | null> {
     return result.user || null;
   } catch (error) {
     if (error instanceof AuthError && error.code === "HTTP_401") {
+      removeStoredToken();
       return null;
     }
     // For other errors like network error or unauthenticated, return null
